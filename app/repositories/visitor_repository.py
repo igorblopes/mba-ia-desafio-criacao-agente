@@ -1,0 +1,1 @@
+"""Persistência planejada de visitantes."""
