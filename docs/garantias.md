@@ -267,7 +267,8 @@ Dois moradores podem pedir a mesma área na mesma data — e aprovar a cobrança
 
 - **Implementado:** `app/database/models.py` define índice parcial e PK do código; `schema.py` cria o esquema.
 - **Implementado:** `app/repositories/reservation_repository.py` — inserção e rollback em violação de integridade.
-- **Implementado parcialmente:** `app/services/reservation_service.py` traduz conflito de integridade na criação; `OperationalError` por banco ocupado ainda escapa.
+- **Implementado:** `app/services/reservation_service.py` (`create_confirmed_reservation` → `_insert_reservation`) abre sessão própria por tentativa, grava e confirma; em `IntegrityError` diagnostica em sessão nova: reserva ATIVA para área/data → `AreaUnavailableError`; código já existente → novo código (máx. 5 tentativas); qualquer outro caso → `DomainError` genérico, sem mascarar como indisponibilidade.
+- **Pendente:** `OperationalError` por banco ocupado além do `busy_timeout` ainda escapa do Service (não ocorre no cenário de corrida testado).
 - **Planejado:** `app/tools/reservas.py` — resposta limitada ao modelo e integração HTTP.
 
 ### Por que não depende do LLM
@@ -285,6 +286,22 @@ Dois moradores podem pedir a mesma área na mesma data — e aprovar a cobrança
 - Teste direto de camada de dados com várias gravações concorrentes (sem passar pelo modelo).
 - Verificar que a perdedora não vê o código nem o apartamento da vencedora.
 - Verificar que, após cancelar, uma nova reserva da mesma área/data é possível e **recebe código novo**.
+
+---
+
+## Evidências do Passo 4 (concorrência e robustez transacional)
+
+Testes em `tests/test_reservation_concurrency.py` (`uv run pytest tests/test_reservation_concurrency.py -v`), sobre Service → Repository → SQLite temporário, sem ADK, Gemini ou API. Cada tarefa concorrente usa `AsyncSession` independente (uma por tentativa, aberta pela fábrica do Service).
+
+- **Garantia final:** índice único parcial `uq_reservas_area_data_ativa` em `(area, data) WHERE status = 'ATIVA'`, definido em `app/database/models.py`. `test_database_rejects_two_active_even_bypassing_service` prova que o banco rejeita ATIVA+ATIVA mesmo sem o Service e aceita CANCELADA+ATIVA.
+- **Corrida 101 × 201** (salão, 2030-05-11): `test_only_one_concurrent_reservation_wins` e `test_concurrent_loser_gets_area_unavailable` — 1 sucesso, 1 `AreaUnavailableError` (sem texto de persistência, código ou apartamento), 1 reserva ATIVA.
+- **Sem `is_available()`:** `test_concurrency_does_not_depend_on_availability_check` — nenhuma consulta de disponibilidade antes do INSERT; só o perdedor consulta, depois do conflito, para diagnóstico.
+- **Repetição:** `test_repeated_concurrency_race` — 25 datas, ordem de disparo alternada; 0 falhas, 0 duplicidades.
+- **Rollback:** `test_conflict_rollback_allows_next_transaction` e `test_repository_rollback_keeps_session_usable_after_integrity_error` — sem `PendingRollbackError`; nova operação funciona.
+- **Cancelamento:** `test_cancelled_reservation_releases_area_date` — 101 ATIVA → 201 recusada → 101 CANCELADA → 201 ATIVA.
+- **Códigos:** `test_reservation_codes_remain_unique_under_concurrency`, `test_code_collision_retries_with_new_code_and_is_not_area_unavailable`, `test_area_conflict_is_not_retried_as_code_collision` e `test_unexpected_integrity_error_is_not_masked`.
+- **SQLite:** `test_sqlite_pragmas_active_on_test_database` — `journal_mode=wal`, `busy_timeout=5000`, `foreign_keys=1`.
+- **Fora do escopo / pendente:** `OperationalError` (`database is locked`) por lock prolongado além do timeout continua sem tradução para domínio; validação concorrente via API + confirmações pertence a etapas posteriores.
 
 ---
 

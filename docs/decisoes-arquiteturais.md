@@ -247,7 +247,7 @@ O apartamento é definido **na criação da sessão** e guardado no estado da se
 ## ADR-008 — Integridade concorrente garantida pelo banco
 
 ### Status
-Aceita *(índice implementado; recuperação e tradução de banco ocupado ainda pendentes)*
+Aceita *(índice implementado e provado sob concorrência no domínio — Passo 4; tradução de banco ocupado ainda pendente)*
 
 ### Contexto
 Regra crítica: no máximo **uma reserva ativa por área e data**. Dois moradores podem pedir a mesma coisa ao mesmo tempo; uma checagem de disponibilidade seguida de gravação não é segura.
@@ -270,6 +270,7 @@ Garantir a exclusividade **no instante da gravação** com:
 
 ### Pontos provisórios
 - ~~Forma exata~~ — **decidido no Passo 2:** índice único parcial `uq_reservas_area_data_ativa ON reservas(area, data) WHERE status = 'ATIVA'`, validado por `uv run python -m scripts.check_constraints` (ATIVA+ATIVA bloqueada; CANCELADA+ATIVA permitida).
+- **Refinado no Passo 4:** o banco é a última linha de defesa e a consulta de disponibilidade é só UX; cada tentativa de gravação usa **sessão e transação próprias** (nunca uma `AsyncSession` compartilhada entre tarefas); `IntegrityError` nunca sai do Service — o repository faz `rollback` e o Service distingue conflito de área/data (`AreaUnavailableError`) de colisão de código (novo código, até 5 tentativas), sem mascarar outros erros de integridade; WAL, `busy_timeout=5000` e `foreign_keys=ON` são validados no banco de teste. Prova: `tests/test_reservation_concurrency.py`.
 - **Ainda em aberto:** modo de transação (por exemplo `BEGIN IMMEDIATE` para escritas) e política de repetição quando o banco estiver ocupado. O Passo 2 configura `busy_timeout=5000` e WAL, que apenas amenizam contenção temporária; a garantia de unicidade vem do índice, não do timeout.
 
 ### Alternativas consideradas

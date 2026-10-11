@@ -116,7 +116,9 @@ Também: duas confirmações pendentes na mesma sessão (por exemplo, reserva e 
 ## RT-003 — Concorrência de reservas
 
 ### Status
-Em validação — **evidência (Passos 2 e 3, 11/10/2026):** `scripts.check_constraints` passou em banco temporário, incluindo o índice único parcial `uq_reservas_area_data_ativa`. O teste `test_concurrent_creation_single_winner` verifica um sucesso, um `AreaUnavailableError` e uma única reserva ATIVA persistida para 101 × 201 no salão em 2030-05-11. O teste `test_concurrent_many_single_winner`, com seis apartamentos, verifica um sucesso e cinco erros de domínio, mas não conta o estado final. Mensagens sem dados de terceiros são verificadas em testes separados de data ocupada e cancelamento alheio, não nos testes concorrentes.
+**Mitigado no domínio** (Passo 4, 11/10/2026) — `tests/test_reservation_concurrency.py` comprova, sobre Service → Repository → SQLite temporário com sessões independentes, 1 sucesso + 1 `AreaUnavailableError` + 1 reserva ATIVA (101 × 201, salão, 2030-05-11), 25 repetições sem duplicidade, rollback seguido de nova operação, liberação após cancelamento e unicidade de código sob concorrência. **Não encerrado:** falta a validação concorrente via API + confirmações e a tradução de `database is locked` por lock prolongado (abaixo).
+
+**Evidência anterior (Passos 2 e 3, 11/10/2026):** `scripts.check_constraints` passou em banco temporário, incluindo o índice único parcial `uq_reservas_area_data_ativa`. O teste `test_concurrent_creation_single_winner` verifica um sucesso, um `AreaUnavailableError` e uma única reserva ATIVA persistida para 101 × 201 no salão em 2030-05-11. O teste `test_concurrent_many_single_winner`, com seis apartamentos, verifica um sucesso e cinco erros de domínio, mas não conta o estado final. Mensagens sem dados de terceiros são verificadas em testes separados de data ocupada e cancelamento alheio, não nos testes concorrentes.
 
 **Falha reproduzida:** em banco temporário, manter `BEGIN IMMEDIATE` em outra conexão além de `busy_timeout=5000` faz criar reserva, cancelar reserva e autorizar visitante propagarem `sqlalchemy.exc.OperationalError` (`database is locked`). O índice continua protegendo a unicidade, mas a fronteira de domínio não contém esse erro. O resultado foi observado em verificação manual, ainda sem teste de regressão na suíte.
 
@@ -143,10 +145,10 @@ Duas aprovações simultâneas para a mesma área e data podem passar por uma ve
 ### Como validar
 > **Planejado:**
 
-1. Teste direto na camada de dados com várias gravações concorrentes (sem modelo).
+1. ~~Teste direto na camada de dados com várias gravações concorrentes (sem modelo).~~ **Feito no Passo 4** (`tests/test_reservation_concurrency.py`).
 2. Fluxo ponta a ponta: duas sessões (101 e 201) aprovam a mesma área/data **ao mesmo tempo**; esperado: duas respostas `200` e **exatamente uma** reserva ativa.
 3. Cancelar e reservar de novo a mesma área/data → já coberto no Service; ainda validar pelo fluxo completo.
-4. Repetir várias vezes (a condição de corrida é intermitente).
+4. ~~Repetir várias vezes (a condição de corrida é intermitente).~~ **Feito no Passo 4** no nível de domínio (25 iterações); repetir também no fluxo via API.
 5. Transformar a reprodução de lock prolongado em teste de regressão: erro de domínio, nenhum efeito parcial e possibilidade de nova operação após liberar o lock.
 
 **Momento recomendado:** assim que o esquema de reservas e a gravação existirem.
