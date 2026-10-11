@@ -30,6 +30,8 @@ Documentos relacionados: [`garantias.md`](garantias.md) · [`decisoes-arquitetur
 ### Status
 Aberto — **risco técnico prioritário** do projeto.
 
+**Evidência parcial (Passo 2):** `DatabaseSessionService` + SQLite persistiu sessão, `state` e evento mínimo entre processos distintos. **Isto NÃO resolve o RT-001:** Tool Confirmation com sessão persistida e a retomada após aprovação continuam **não validadas** (exigem agente/Runner, previstos para etapa posterior).
+
 ### Impacto
 **Alto.** Se a retomada não funcionar com sessão persistida, as Garantias 1 e 3 ficam comprometidas ao mesmo tempo.
 
@@ -114,7 +116,7 @@ Também: duas confirmações pendentes na mesma sessão (por exemplo, reserva e 
 ## RT-003 — Concorrência de reservas
 
 ### Status
-Aberto
+Aberto — **evidência parcial (Passo 2):** o índice único parcial `uq_reservas_area_data_ativa` bloqueia, na camada de dados, duas reservas ATIVAS na mesma área/data e permite ATIVA após CANCELADA (`scripts.check_constraints`). Ainda **não** foram testadas gravações concorrentes reais, nem o modo de transação/repetição sob "database is locked".
 
 ### Impacto
 **Alto.** Dupla reserva viola a regra de negócio mais sensível a concorrência (Garantia 5).

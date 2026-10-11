@@ -206,7 +206,10 @@ data/
 - O comando de restauração precisa definir o que acontece com as sessões do ADK.
 
 ### Pontos provisórios
-- Se `scripts/reset.py` também apaga `adk_sessions.db` — **em aberto**.
+- ~~Se `scripts/reset.py` também apaga `adk_sessions.db`~~ — **decidido no Passo 2:** por padrão o reset restaura somente `condominio.db` e **preserva** `adk_sessions.db`; a opção explícita `--sessions` apaga também as sessões (uso em desenvolvimento).
+
+### Evidência (Passo 2)
+- `DatabaseSessionService` sobre `sqlite+aiosqlite` em `adk_sessions.db` persistiu sessão, `state["apartamento"]` e um evento mínimo entre dois processos distintos (`uv run python -m scripts.check_session_persistence`).
 
 ### Alternativas consideradas
 - **Um único banco para tudo:** simplifica transações, mas acopla o domínio ao esquema do ADK.
@@ -265,7 +268,8 @@ Garantir a exclusividade **no instante da gravação** com:
 - Como o histórico mantém reservas canceladas ([ADR-011](#adr-011--histórico-de-reservas-canceladas-mantido)), a unicidade precisa valer **somente para reservas ativas**.
 
 ### Pontos provisórios
-- Forma exata (índice único parcial ou equivalente), modo de transação e política de espera/repetição quando o banco estiver ocupado.
+- ~~Forma exata~~ — **decidido no Passo 2:** índice único parcial `uq_reservas_area_data_ativa ON reservas(area, data) WHERE status = 'ATIVA'`, validado por `uv run python -m scripts.check_constraints` (ATIVA+ATIVA bloqueada; CANCELADA+ATIVA permitida).
+- **Ainda em aberto:** modo de transação (por exemplo `BEGIN IMMEDIATE` para escritas) e política de repetição quando o banco estiver ocupado. O Passo 2 configura `busy_timeout=5000` e WAL, que apenas amenizam contenção temporária; a garantia de unicidade vem do índice, não do timeout.
 
 ### Alternativas consideradas
 - **Verificar disponibilidade e depois gravar:** rejeitada — *check-then-act* sujeito a condição de corrida.
