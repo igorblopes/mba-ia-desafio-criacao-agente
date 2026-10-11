@@ -17,7 +17,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import Reserva
+from app.database.models import STATUS_ATIVA, Reserva
 
 
 class ReservationRepository:
@@ -48,6 +48,33 @@ class ReservationRepository:
             stmt = stmt.where(Reserva.status == status)
         result = await self._session.scalars(stmt.order_by(Reserva.codigo))
         return list(result)
+
+    async def get_by_apartment_and_code(
+        self, apartamento: str, codigo: str, status: str | None = None
+    ) -> Reserva | None:
+        """Busca restrita ao apartamento: reserva alheia é indistinguível de inexistente."""
+        stmt = select(Reserva).where(
+            Reserva.apartamento == apartamento, Reserva.codigo == codigo
+        )
+        if status is not None:
+            stmt = stmt.where(Reserva.status == status)
+        return await self._session.scalar(stmt)
+
+    async def code_exists(self, codigo: str) -> bool:
+        """Só existência (inclui canceladas); não devolve dados da reserva."""
+        return (
+            await self._session.scalar(select(Reserva.codigo).where(Reserva.codigo == codigo))
+        ) is not None
+
+    async def has_active(self, area: str, data: dt.date) -> bool:
+        """Só existência de reserva ATIVA para área/data; não identifica o dono."""
+        return (
+            await self._session.scalar(
+                select(Reserva.codigo).where(
+                    Reserva.area == area, Reserva.data == data, Reserva.status == STATUS_ATIVA
+                )
+            )
+        ) is not None
 
     async def insert(self, reserva: Reserva) -> Reserva:
         """Grava a reserva (flush). A transação é confirmada por quem chamou."""

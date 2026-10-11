@@ -1,7 +1,7 @@
 # Decisões arquiteturais — Residencial Aurora
 
-> **Status do documento:** ADRs simplificados registrados **antes** da implementação.
-> Nada aqui está implementado. Quando uma decisão descreve algo futuro, o texto usa "planejado" ou "proposto".
+> **Status do documento (11/10/2026):** decisões de arquitetura com implementação e evidências dos Passos 2 e 3 registradas nas ADRs pertinentes. API, agentes, tools e confirmação ADK continuam planejados.
+> **Aceita** indica decisão, não comprovação de funcionamento. Resultados e limites dos testes constam em [garantias.md](garantias.md#validação-dos-passos-2-e-3-em-11102026).
 > Nomes de arquivos e módulos seguem a proposta inicial de [`arquitetura.md`](arquitetura.md) e podem evoluir.
 
 **Princípio que guia todas as decisões:**
@@ -24,11 +24,12 @@
 | [ADR-005](#adr-005--sqlite-como-armazenamento) | SQLite como armazenamento | Aceita |
 | [ADR-006](#adr-006--bancos-separados-para-domínio-e-sessões-do-adk) | Bancos separados para domínio e sessões do ADK | Aceita |
 | [ADR-007](#adr-007--identidade-obtida-exclusivamente-da-sessão) | Identidade obtida exclusivamente da sessão | Aceita |
-| [ADR-008](#adr-008--integridade-concorrente-garantida-pelo-banco) | Integridade concorrente garantida pelo banco | Aceita (forma exata provisória) |
+| [ADR-008](#adr-008--integridade-concorrente-garantida-pelo-banco) | Integridade concorrente garantida pelo banco | Aceita (índice implementado; tratamento de contenção pendente) |
 | [ADR-009](#adr-009--regulamento-consultado-sob-demanda) | Regulamento consultado sob demanda | Aceita (seleção provisória) |
 | [ADR-010](#adr-010--isolamento-da-integração-adk-em-adkruntime) | Isolamento da integração ADK em `AdkRuntime` | Aceita |
 | [ADR-011](#adr-011--histórico-de-reservas-canceladas-mantido) | Histórico de reservas canceladas mantido | Aceita |
 | [ADR-012](#adr-012--controle-próprio-de-confirmações-além-do-estado-do-adk) | Controle próprio de confirmações além do estado do ADK | Aceita (integração provisória) |
+| [ADR-013](#adr-013--camada-de-service-erros-de-domínio-e-separação-request--execução-confirmada) | Services e execução confirmada separada | Aceita (tratamento de persistência incompleto) |
 
 ---
 
@@ -246,7 +247,7 @@ O apartamento é definido **na criação da sessão** e guardado no estado da se
 ## ADR-008 — Integridade concorrente garantida pelo banco
 
 ### Status
-Aceita *(forma exata da constraint e política de transação são decisões de implementação)*
+Aceita *(índice implementado; recuperação e tradução de banco ocupado ainda pendentes)*
 
 ### Contexto
 Regra crítica: no máximo **uma reserva ativa por área e data**. Dois moradores podem pedir a mesma coisa ao mesmo tempo; uma checagem de disponibilidade seguida de gravação não é segura.
@@ -366,8 +367,10 @@ Reservas canceladas **permanecem registradas** com `status = CANCELADA` (por exe
 - A constraint de exclusividade por área e data vale **só para ativas** ([ADR-008](#adr-008--integridade-concorrente-garantida-pelo-banco)).
 - A geração de códigos deve continuar sem repetir após reinício e levar em conta também as reservas canceladas.
 
-### Pontos provisórios
-- Formato do código e estratégia de geração (a unicidade, não o formato, é a decisão firme).
+### Implementação do Passo 3
+- `generate_reservation_code()` usa `RSV-` + os primeiros 8 hex de UUID4, em maiúsculas. A PK de `Reserva.codigo` garante unicidade; o gerador isoladamente não a garante.
+- `_insert_reservation()` tenta novamente após colisão de código, até cinco tentativas por padrão; ao esgotar, lança `ReservationCodeGenerationError`.
+- O histórico cancelado permanece no banco e participa da unicidade. Os testes forçam colisão com código cancelado e esgotamento de tentativas.
 
 ### Alternativas consideradas
 - **Excluir fisicamente a reserva:** rejeitada — permitiria reuso de código.
@@ -421,14 +424,36 @@ Estados: `PENDING`, `APPROVED`, `REJECTED`. Regras:
 
 ---
 
+## ADR-013 — Camada de Service, erros de domínio e separação request / execução confirmada
+
+### Status
+Aceita (Passo 3)
+
+### Contexto
+As regras do condomínio precisam funcionar sem LLM e sem expor detalhes de persistência.
+
+### Decisão
+- `ReservationService` e `VisitorService` (`app/services/`) concentram os casos de uso; repositories continuam só com persistência (ganharam consultas restritas ao apartamento e de existência).
+- Erros de domínio em `app/domain/errors.py` (`DomainError` e derivados). Na inserção de reserva, `IntegrityError` é convertido: conflito de área/data → `AreaUnavailableError`; colisão de código → nova tentativa (máx. 5 por padrão) → `ReservationCodeGenerationError`. Isso não constitui tradução geral de falhas de persistência.
+- `request_*` decide (gratuito → cria; pago/visitante → `REQUIRES_CONFIRMATION`, sem gravar); `create_confirmed_*` são funções internas separadas. Não existe parâmetro `confirmed`.
+- Reserva alheia é tratada como inexistente (`ReservationNotFoundError`).
+- `request_reservation` também consulta disponibilidade antes de pedir confirmação (apenas UX; o banco segue sendo a garantia).
+- Rejeita-se nome de visitante vazio (sanidade de entrada, `InvalidVisitorNameError`).
+
+### Consequências
+Os services gerenciam suas sessões. Na criação de reservas, a sessão de validação termina antes da sessão de inserção; cada tentativa usa uma nova sessão. No cancelamento e na autorização confirmada de visitante, validação e escrita ocorrem na mesma sessão. Portanto, a separação entre leitura e escrita não é uma propriedade de todos os casos de uso.
+
+### Pendência comprovada do Passo 3
+Na auditoria de 11/10/2026, uma transação concorrente `BEGIN IMMEDIATE` mantida em SQLite temporário além de `busy_timeout=5000` fez criar reserva, cancelar reserva e autorizar visitante propagarem `sqlalchemy.exc.OperationalError` (`database is locked`). Há rollback, mas não tradução desse erro para domínio. Corrigir essa fronteira e incluir teste de regressão antes do aceite integral. Repetição automática é uma política ainda a decidir; banco ocupado não equivale a área ocupada.
+
+---
+
 ## Decisões ainda abertas (resumo)
 
 | Tema | Onde |
 |---|---|
 | Validação da escolha inicial `sub_agents` + transferência e eventual revisão | ADR-002 |
-| Forma exata da constraint, modo de transação e espera sob concorrência | ADR-008 |
+| Recuperação e tradução de banco ocupado; eventual política de repetição e revisão das transações | ADR-008 / ADR-013 |
 | Granularidade e método de seleção de trechos do regulamento | ADR-009 |
-| Formato e geração do código de reserva | ADR-011 |
-| Se a restauração também apaga sessões do ADK | ADR-006 |
 | Relação entre `id` de confirmação do backend e identificador do ADK | ADR-012 |
 | Ordem e recuperação de falhas entre confirmação, retomada e gravação | ADR-012 |

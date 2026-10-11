@@ -1,8 +1,15 @@
 # Arquitetura — Residencial Aurora
 
-> **Status do documento:** registro de decisões tomadas **antes** da implementação.
-> Nenhum código existe ainda. Tudo o que é descrito aqui é **planejado** ou **proposto**.
-> Nomes de arquivos, módulos e operações são a **proposta inicial** e podem evoluir; mudanças devem ser comparadas com este documento e registradas em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md).
+> **Status do documento (11/10/2026):** arquitetura alvo com persistência do Passo 2 e regras de negócio do Passo 3 implementadas. O estado comprovado está descrito abaixo; os fluxos de agentes, tools, HTTP e confirmação são planejados.
+> Mudanças de decisão são registradas em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md). Decisão aceita não significa implementação ou validação ponta a ponta.
+
+## Estado atual dos Passos 2 e 3
+
+- **Passo 2 — persistência validada:** modelos em `app/database/models.py`, criação do esquema em `schema.py`, conexão e sessões em `connection.py`, repositories e restauração em `scripts/reset.py`. O banco de domínio contém apartamentos, áreas, reservas e visitantes; a tabela de confirmações ainda não existe. Taxas são armazenadas em centavos inteiros.
+- **Sessão ADK:** `app/runtime/session_service.py` cria `DatabaseSessionService` separado do domínio. Sessão, estado e evento mínimo sobreviveram à troca de processo; isso não comprova Runner, conversa ou retomada de confirmação.
+- **Passo 3 — regras funcionais validadas, aceite integral pendente:** services de reservas e visitantes, DTOs e erros em `app/domain/`, testes isolados em `tests/`. A criação de reserva separa validação e escrita; cancelamento e autorização de visitante validam e escrevem na mesma sessão. Erros de banco ocupado ainda escapam como `OperationalError` (RT-003).
+- **Ainda planejados:** agentes, tools, rotas, `AdkRuntime`, controle persistido de confirmações e consulta do regulamento. Os arquivos correspondentes são estruturas iniciais sem essas funcionalidades.
+- Resultados e limites da validação: [garantias.md](garantias.md#validação-dos-passos-2-e-3-em-11102026).
 
 Documentos relacionados:
 
@@ -27,9 +34,9 @@ Tecnologias definidas:
 
 | Item | Decisão |
 |---|---|
-| Linguagem | Python 3.12 ou superior |
+| Linguagem | Python 3.12 (`>=3.12,<3.13` em `pyproject.toml`) |
 | Gerenciador de projeto | `uv` (`pyproject.toml` e `uv.lock` versionados) |
-| Framework de agentes | Google ADK 2.x, versão igual ou superior a 2.2.0 e **exatamente fixada** no projeto |
+| Framework de agentes | `google-adk[db]==2.9.1`, fixado no projeto; agentes ainda planejados |
 | Modelo | Gemini; modelo específico escolhido no Passo 1 e centralizado em `GEMINI_MODEL` |
 | API | FastAPI |
 | Armazenamento | SQLite (dois bancos separados) |
@@ -338,7 +345,7 @@ O **estado inicial** do condomínio vem dos arquivos em `dados/` (somente leitur
 
 ### 8.2 `adk_sessions.db` — sessões e eventos do ADK
 
-Persistência de sessões e eventos do Google ADK, com a intenção de usar `DatabaseSessionService` ou mecanismo equivalente do ADK.
+Persistência de sessões e eventos via `DatabaseSessionService`, implementada em `app/runtime/session_service.py`. O fluxo completo abaixo ainda depende da API e do runtime.
 
 Objetivo (Garantia 3):
 
@@ -490,7 +497,7 @@ Rotas com `{session_id}` respondem `404` se a sessão não existir.
 
 ## 12. Estrutura planejada do repositório
 
-> **Proposta inicial.** Nenhum destes arquivos existe ainda (exceto `dados/`, que já faz parte do repositório base). A estrutura pode evoluir durante a implementação.
+> **Proposta inicial de organização, não inventário completo.** O estado atual está na abertura deste documento. A implementação também inclui `app/domain/`, `services/_common.py`, `repositories/apartment_repository.py`, `runtime/session_service.py`, `database/models.py`, scripts de verificação e `tests/`.
 
 ```text
 residencial-aurora/
@@ -553,9 +560,9 @@ residencial-aurora/
 Notas:
 
 - `dados/` (com **d**, em português) contém o estado inicial **somente leitura** do condomínio e o regulamento. `data/` (em inglês) contém os bancos SQLite **gerados**. Os nomes são muito parecidos; vale manter essa distinção explícita na documentação e evitar confusão no código.
-- Os arquivos `*.db` são artefatos de execução e **não** devem ser versionados (a inclusão em `.gitignore` é uma ação **planejada**).
+- Os arquivos `*.db` são artefatos de execução e **não** devem ser versionados.
 - As rotas de mensagens e eventos não têm arquivo próprio nesta proposta; a alocação (por exemplo, dentro de `api/sessoes.py`) fica para a implementação.
-- `scripts/reset.py` é o ponto planejado para restaurar reservas e visitantes ao estado de `dados/`. Se esse comando também apaga sessões é uma **decisão ainda em aberto**.
+- `scripts/reset.py` restaura o domínio a partir de `dados/` e preserva sessões por padrão. A opção explícita `--sessions` também apaga o banco de sessões (ADR-006).
 
 ---
 
@@ -566,6 +573,4 @@ Resumo; o detalhe está em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.
 - Validação da escolha inicial `sub_agents` + transferência; eventual revisão da topologia se a retomada falhar.
 - Relação entre o `id` da confirmação do backend e o identificador da chamada pendente no ADK.
 - Granularidade e método de seleção de trechos do regulamento.
-- Formato de geração do código de reserva e como garantir que continua sem repetir após reinício.
-- Se o comando de restauração também apaga sessões do ADK.
-- Forma exata da constraint SQLite (índice único parcial ou equivalente) e política de transação/espera sob concorrência.
+- Política de recuperação e tradução de falhas de banco ocupado nos services. Já implementados: WAL, `busy_timeout=5000` e índice único parcial `uq_reservas_area_data_ativa`; código `RSV-` + 8 hex com até cinco tentativas, protegido pela PK e pelo histórico preservado (ADRs 008 e 011).

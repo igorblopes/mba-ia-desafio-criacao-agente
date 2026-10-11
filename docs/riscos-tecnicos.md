@@ -1,13 +1,13 @@
 # Riscos técnicos — Residencial Aurora
 
-> **Status do documento:** registro pré-implementação. Os riscos abaixo são **hipóteses a validar**; nenhum foi testado ainda.
-> Cada "Como validar" descreve um teste **planejado**. Arquivos citados seguem a proposta inicial de [`arquitetura.md`](arquitetura.md) e ainda **não existem**.
+> **Status do documento (11/10/2026):** registro de riscos com evidências dos Passos 2 e 3. A seção de status de cada risco distingue o que foi validado e o que permanece pendente.
+> "Como validar" descreve o plano completo; verificações já executadas estão identificadas nas evidências e em [garantias.md](garantias.md#validação-dos-passos-2-e-3-em-11102026). Arquivo existente não implica funcionalidade implementada.
 
 Documentos relacionados: [`garantias.md`](garantias.md) · [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md)
 
 ## Convenção
 
-- **Status:** `Aberto` (ainda não validado), `Em validação`, `Mitigado` ou `Aceito`. Todos os riscos abaixo iniciam como **Aberto**.
+- **Status:** `Aberto` (sem validação suficiente), `Em validação` (evidência parcial), `Mitigado` ou `Aceito`. Uma evidência de persistência ou Service não encerra o risco ponta a ponta.
 - **Impacto:** Alto / Médio / Baixo.
 
 ## Resumo
@@ -116,7 +116,11 @@ Também: duas confirmações pendentes na mesma sessão (por exemplo, reserva e 
 ## RT-003 — Concorrência de reservas
 
 ### Status
-Aberto — **evidência parcial (Passo 2):** o índice único parcial `uq_reservas_area_data_ativa` bloqueia, na camada de dados, duas reservas ATIVAS na mesma área/data e permite ATIVA após CANCELADA (`scripts.check_constraints`). Ainda **não** foram testadas gravações concorrentes reais, nem o modo de transação/repetição sob "database is locked".
+Em validação — **evidência (Passos 2 e 3, 11/10/2026):** `scripts.check_constraints` passou em banco temporário, incluindo o índice único parcial `uq_reservas_area_data_ativa`. O teste `test_concurrent_creation_single_winner` verifica um sucesso, um `AreaUnavailableError` e uma única reserva ATIVA persistida para 101 × 201 no salão em 2030-05-11. O teste `test_concurrent_many_single_winner`, com seis apartamentos, verifica um sucesso e cinco erros de domínio, mas não conta o estado final. Mensagens sem dados de terceiros são verificadas em testes separados de data ocupada e cancelamento alheio, não nos testes concorrentes.
+
+**Falha reproduzida:** em banco temporário, manter `BEGIN IMMEDIATE` em outra conexão além de `busy_timeout=5000` faz criar reserva, cancelar reserva e autorizar visitante propagarem `sqlalchemy.exc.OperationalError` (`database is locked`). O índice continua protegendo a unicidade, mas a fronteira de domínio não contém esse erro. O resultado foi observado em verificação manual, ainda sem teste de regressão na suíte.
+
+**Correção necessária para o Passo 3:** traduzir falhas esperadas de armazenamento para erro de domínio sem detalhes SQL, mantendo rollback e encerramento das sessões. Definir separadamente se haverá repetição limitada; banco ocupado não significa área ocupada. API/ADK e duas respostas HTTP `200` continuam pendentes de etapas posteriores.
 
 ### Impacto
 **Alto.** Dupla reserva viola a regra de negócio mais sensível a concorrência (Garantia 5).
@@ -141,8 +145,9 @@ Duas aprovações simultâneas para a mesma área e data podem passar por uma ve
 
 1. Teste direto na camada de dados com várias gravações concorrentes (sem modelo).
 2. Fluxo ponta a ponta: duas sessões (101 e 201) aprovam a mesma área/data **ao mesmo tempo**; esperado: duas respostas `200` e **exatamente uma** reserva ativa.
-3. Cancelar e reservar de novo a mesma área/data → deve funcionar, com código novo.
+3. Cancelar e reservar de novo a mesma área/data → já coberto no Service; ainda validar pelo fluxo completo.
 4. Repetir várias vezes (a condição de corrida é intermitente).
+5. Transformar a reprodução de lock prolongado em teste de regressão: erro de domínio, nenhum efeito parcial e possibilidade de nova operação após liberar o lock.
 
 **Momento recomendado:** assim que o esquema de reservas e a gravação existirem.
 
@@ -151,7 +156,7 @@ Duas aprovações simultâneas para a mesma área e data podem passar por uma ve
 ## RT-004 — Vazamento de identidade entre apartamentos
 
 ### Status
-Aberto
+Em validação — os testes do Passo 3 comprovam filtros por apartamento, disponibilidade booleana e erros genéricos para reserva alheia/data ocupada. A origem confiável de `apartment` é precondição documentada dos services; ainda não existe integração de identidade por tools nem inspeção de eventos de conversa. O risco ponta a ponta permanece aberto.
 
 ### Impacto
 **Alto.** Quebra a Garantia 2; envolve dados de outros moradores.
