@@ -33,6 +33,7 @@ from app.domain.errors import (
 from app.domain.types import ReservationRequestResult, ReservationView, RequestStatus
 from app.repositories.reservation_repository import ReservationRepository
 from app.services._common import require_apartment, require_area
+from app.services._persistence import is_unique_violation, service_session
 
 MAX_CODE_ATTEMPTS = 5
 
@@ -59,7 +60,7 @@ class ReservationService:
 
     async def list_active_reservations(self, apartment: str) -> list[ReservationView]:
         """Reservas ATIVAS do apartamento; o filtro é aplicado na consulta SQL."""
-        async with self._factory() as session:
+        async with service_session(self._factory) as session:
             numero = await require_apartment(session, apartment)
             rows = await ReservationRepository(session).list_by_apartment(
                 numero, status=STATUS_ATIVA
@@ -68,7 +69,7 @@ class ReservationService:
 
     async def is_available(self, area_id: str, date: dt.date) -> bool:
         """Apenas True/False; nunca identifica quem reservou. Não é a garantia final."""
-        async with self._factory() as session:
+        async with service_session(self._factory) as session:
             area = await require_area(session, area_id)
             return not await ReservationRepository(session).has_active(area.id, date)
 
@@ -76,7 +77,7 @@ class ReservationService:
         self, apartment: str, area_id: str, date: dt.date
     ) -> ReservationRequestResult:
         """Área gratuita → cria (CREATED). Área paga → REQUIRES_CONFIRMATION, sem gravar."""
-        async with self._factory() as session:
+        async with service_session(self._factory) as session:
             numero = await require_apartment(session, apartment)
             area = await require_area(session, area_id)
             available = not await ReservationRepository(session).has_active(area.id, date)
@@ -106,7 +107,7 @@ class ReservationService:
         self, apartment: str, area_id: str, date: dt.date
     ) -> ReservationView:
         """INTERNA: executa após confirmação externa validada. Não exposta ao modelo."""
-        async with self._factory() as session:
+        async with service_session(self._factory) as session:
             numero = await require_apartment(session, apartment)
             area = await require_area(session, area_id)
             resolved_area = area.id
@@ -120,7 +121,7 @@ class ReservationService:
         Reserva de outro apartamento é indistinguível de inexistente.
         """
         code = str(reservation_code).strip().upper()
-        async with self._factory() as session:
+        async with service_session(self._factory) as session:
             try:
                 numero = await require_apartment(session, apartment)
                 repo = ReservationRepository(session)
@@ -144,7 +145,7 @@ class ReservationService:
     ) -> ReservationView:
         for _ in range(self._max_attempts):
             code = self._code_generator()
-            async with self._factory() as session:
+            async with service_session(self._factory) as session:
                 repo = ReservationRepository(session)
                 try:
                     reserva = Reserva(
@@ -157,18 +158,15 @@ class ReservationService:
                     await repo.insert(reserva)  # rollback feito pelo repository em caso de erro
                     await session.commit()
                     return _view(reserva)
-                except IntegrityError:
-                    pass
+                except IntegrityError as error:
+                    await session.rollback()
+                    if is_unique_violation(error, "reservas.area, reservas.data"):
+                        raise AreaUnavailableError() from None
+                    if is_unique_violation(error, "reservas.codigo"):
+                        continue  # PK inclui códigos de reservas canceladas.
+                    raise DomainError("Não foi possível registrar a reserva.") from None
                 except BaseException:
                     await session.rollback()
                     raise
 
-            # Diagnóstico em sessão nova: conflito de área/data ou colisão de código?
-            async with self._factory() as session:
-                repo = ReservationRepository(session)
-                if await repo.has_active(area_id, date):
-                    raise AreaUnavailableError()
-                if await repo.code_exists(code):
-                    continue  # colisão (inclui códigos de reservas canceladas): novo código
-            raise DomainError("Não foi possível registrar a reserva.")
         raise ReservationCodeGenerationError()

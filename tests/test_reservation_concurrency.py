@@ -148,7 +148,7 @@ async def test_concurrency_does_not_depend_on_availability_check(session_factory
         return await original(self, area, data)
 
     # create_confirmed_reservation NÃO deve consultar disponibilidade antes do INSERT;
-    # has_active só pode ser usado DEPOIS do conflito, para diagnóstico.
+    # O diagnóstico também usa a exceção original, sem consulta posterior.
     ReservationRepository.has_active = spy  # type: ignore[method-assign]
     try:
         wins, losses = await _race(svc, AREA, DATE)
@@ -158,8 +158,8 @@ async def test_concurrency_does_not_depend_on_availability_check(session_factory
     assert len(wins) == 1 and len(losses) == 1
     assert isinstance(losses[0], AreaUnavailableError)
     assert await _count_active(session_factory, AREA, DATE) == 1
-    # apenas o perdedor consulta, e só após o IntegrityError (1 diagnóstico)
-    assert called["has_active_before_insert"] == 1
+    # A classificação não depende de um estado que pode mudar após o conflito.
+    assert called["has_active_before_insert"] == 0
 
 
 async def test_many_concurrent_requests_single_winner_and_final_state(service, session_factory):

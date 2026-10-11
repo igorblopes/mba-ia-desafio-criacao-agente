@@ -11,6 +11,13 @@ class DomainError(Exception):
     """Base de todos os erros de regra de negócio."""
 
 
+class StorageBusyError(DomainError):
+    """Contenção temporária de armazenamento, distinta de área ocupada."""
+
+    def __init__(self) -> None:
+        super().__init__("Serviço temporariamente ocupado. Tente novamente em instantes.")
+
+
 class ApartmentNotFoundError(DomainError):
     def __init__(self) -> None:
         super().__init__("Apartamento não encontrado.")

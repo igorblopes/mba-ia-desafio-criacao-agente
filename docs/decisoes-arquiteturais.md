@@ -1,7 +1,7 @@
 # Decisões arquiteturais — Residencial Aurora
 
-> **Status do documento (11/10/2026):** decisões de arquitetura com implementação e evidências dos Passos 2 e 3 registradas nas ADRs pertinentes. API, agentes, tools e confirmação ADK continuam planejados.
-> **Aceita** indica decisão, não comprovação de funcionamento. Resultados e limites dos testes constam em [garantias.md](garantias.md#validação-dos-passos-2-e-3-em-11102026).
+> **Status do documento (11/10/2026):** decisões de arquitetura com implementação e evidências dos Passos 2 a 5, incluindo as correções de integridade e contenção. Seis FunctionTools estão implementadas; API, agentes, confirmação ADK e regulamento continuam planejados.
+> **Aceita** indica decisão, não comprovação de funcionamento. Resultados e limites dos testes constam em [garantias.md](garantias.md#estado-atual-e-evidências).
 > Nomes de arquivos e módulos seguem a proposta inicial de [`arquitetura.md`](arquitetura.md) e podem evoluir.
 
 **Princípio que guia todas as decisões:**
@@ -24,12 +24,12 @@
 | [ADR-005](#adr-005--sqlite-como-armazenamento) | SQLite como armazenamento | Aceita |
 | [ADR-006](#adr-006--bancos-separados-para-domínio-e-sessões-do-adk) | Bancos separados para domínio e sessões do ADK | Aceita |
 | [ADR-007](#adr-007--identidade-obtida-exclusivamente-da-sessão) | Identidade obtida exclusivamente da sessão | Aceita |
-| [ADR-008](#adr-008--integridade-concorrente-garantida-pelo-banco) | Integridade concorrente garantida pelo banco | Aceita (índice implementado; tratamento de contenção pendente) |
+| [ADR-008](#adr-008--integridade-concorrente-garantida-pelo-banco) | Integridade concorrente garantida pelo banco | Aceita (índice implementado; contenção traduzida no domínio) |
 | [ADR-009](#adr-009--regulamento-consultado-sob-demanda) | Regulamento consultado sob demanda | Aceita (seleção provisória) |
 | [ADR-010](#adr-010--isolamento-da-integração-adk-em-adkruntime) | Isolamento da integração ADK em `AdkRuntime` | Aceita |
 | [ADR-011](#adr-011--histórico-de-reservas-canceladas-mantido) | Histórico de reservas canceladas mantido | Aceita |
 | [ADR-012](#adr-012--controle-próprio-de-confirmações-além-do-estado-do-adk) | Controle próprio de confirmações além do estado do ADK | Aceita (integração provisória) |
-| [ADR-013](#adr-013--camada-de-service-erros-de-domínio-e-separação-request--execução-confirmada) | Services e execução confirmada separada | Aceita (tratamento de persistência incompleto) |
+| [ADR-013](#adr-013--camada-de-service-erros-de-domínio-e-separação-request--execução-confirmada) | Services e execução confirmada separada | Aceita (contenção tratada; outros erros operacionais propagam) |
 
 ---
 
@@ -148,6 +148,13 @@ Adotar as camadas **Agent → Tool → Service → Repository → Database** com
 - Mais arquivos e indireção.
 - Disciplina necessária: nenhuma regra crítica deve "escorregar" para o prompt ou para a tool.
 
+### Implementação (Passo 5)
+- Registro explícito de seis `FunctionTool` em `app/tools/__init__.py`, com implementações em `app/tools/reservations.py` e `app/tools/visitors.py`. Os arquivos em português da proposta inicial são placeholders.
+- **Tools são adaptadores finos:** convertem data (`AAAA-MM-DD`), chamam o Service e traduzem o resultado para `dict`; não contêm regra de taxa, autorização, SQL nem concorrência. Obtêm Services por `app/services/provider.py`, sem importar SQLAlchemy ou Repositories.
+- **Identidade vem exclusivamente de `ToolContext.state["apartamento"]`** (`app/tools/context.py`), sem fallback; ausência → `invalid_session`.
+- Tools públicas: `listar_minhas_reservas`, `verificar_disponibilidade`, `solicitar_reserva`, `cancelar_minha_reserva`, `listar_meus_visitantes`, `solicitar_autorizacao_visitante`. `create_confirmed_*` permanecem internos aos Services.
+- Tool Confirmation **não** está ativada; Agents e API ainda não existem. `requires_confirmation` é apenas retorno estruturado, sem persistência de pendência. Os testes usam contexto simulado; não comprovam integração ponta a ponta.
+
 ### Alternativas consideradas
 - **Tools acessando o banco diretamente:** menos código, mas mistura regra, persistência e fronteira com o LLM.
 - **Regras nos prompts dos agentes:** rejeitada — violaria o princípio central.
@@ -238,6 +245,12 @@ O apartamento é definido **na criação da sessão** e guardado no estado da se
 - Retornos de tools devem ser minimizados para **não vazar** dados de terceiros (que iriam também para os eventos).
 - Operação sobre reserva inexistente ou de outro apartamento deve devolver resposta indistinguível.
 
+### Implementação e limites (Passo 5)
+- `app/tools/context.py` lê apenas `state["apartamento"]`, sem fallback; ausência ou valor sem formato básico retorna `invalid_session` nas tools.
+- A assinatura Python recebe `ToolContext`; os schemas gerados pelo ADK omitem esse argumento. `tests/test_tool_schemas.py` verifica os parâmetros visíveis das seis tools.
+- Services de operações pessoais validam a existência do apartamento. A consulta de disponibilidade apenas exige identidade no estado e retorna booleano; não autentica nem consulta o cadastro do apartamento.
+- A origem confiável do estado continua sendo uma precondição: criação e imutabilidade da identidade pela API, resistência a mensagens maliciosas no fluxo real e inspeção de eventos ainda dependem da integração futura.
+
 ### Alternativas consideradas
 - **Apartamento como argumento da tool, validado contra o da sessão:** funciona, mas mantém a superfície de erro e convida a esquecer a validação em uma tool nova.
 - **Identidade nas instruções do agente:** rejeitada — dependeria do prompt.
@@ -247,7 +260,7 @@ O apartamento é definido **na criação da sessão** e guardado no estado da se
 ## ADR-008 — Integridade concorrente garantida pelo banco
 
 ### Status
-Aceita *(índice implementado e provado sob concorrência no domínio — Passo 4; tradução de banco ocupado ainda pendente)*
+Aceita *(índice implementado e provado sob concorrência no domínio — Passo 4; contenção traduzida em StorageBusyError)*
 
 ### Contexto
 Regra crítica: no máximo **uma reserva ativa por área e data**. Dois moradores podem pedir a mesma coisa ao mesmo tempo; uma checagem de disponibilidade seguida de gravação não é segura.
@@ -268,10 +281,11 @@ Garantir a exclusividade **no instante da gravação** com:
 - O repositório deve expor o conflito de forma tratável e o service traduzi-lo em resposta sem vazar dados do outro apartamento.
 - Como o histórico mantém reservas canceladas ([ADR-011](#adr-011--histórico-de-reservas-canceladas-mantido)), a unicidade precisa valer **somente para reservas ativas**.
 
-### Pontos provisórios
+### Decisões de implementação e limites
 - ~~Forma exata~~ — **decidido no Passo 2:** índice único parcial `uq_reservas_area_data_ativa ON reservas(area, data) WHERE status = 'ATIVA'`, validado por `uv run python -m scripts.check_constraints` (ATIVA+ATIVA bloqueada; CANCELADA+ATIVA permitida).
-- **Refinado no Passo 4:** o banco é a última linha de defesa e a consulta de disponibilidade é só UX; cada tentativa de gravação usa **sessão e transação próprias** (nunca uma `AsyncSession` compartilhada entre tarefas); `IntegrityError` nunca sai do Service — o repository faz `rollback` e o Service distingue conflito de área/data (`AreaUnavailableError`) de colisão de código (novo código, até 5 tentativas), sem mascarar outros erros de integridade; WAL, `busy_timeout=5000` e `foreign_keys=ON` são validados no banco de teste. Prova: `tests/test_reservation_concurrency.py`.
-- **Ainda em aberto:** modo de transação (por exemplo `BEGIN IMMEDIATE` para escritas) e política de repetição quando o banco estiver ocupado. O Passo 2 configura `busy_timeout=5000` e WAL, que apenas amenizam contenção temporária; a garantia de unicidade vem do índice, não do timeout.
+- **Refinado no Passo 4:** o banco é a última linha de defesa e a consulta de disponibilidade é só UX; cada tentativa de gravação usa **sessão e transação próprias** (nunca uma `AsyncSession` compartilhada entre tarefas); na inserção de reserva, `IntegrityError` é traduzido pelo Service — o repository faz `rollback` e o Service distingue conflito de área/data (`AreaUnavailableError`) de colisão de código (novo código, até 5 tentativas), pela exceção SQLite original (código estendido e colunas), sem consulta posterior; outras violações viram DomainError, não indisponibilidade; WAL, `busy_timeout=5000` e `foreign_keys=ON` são validados no banco de teste. Prova: `tests/test_reservation_concurrency.py`.
+- **Classificação SQLite:** `app/services/_persistence.py` combina o código estendido com as colunas informadas na mensagem original. Formatos desconhecidos não são tratados como colisão conhecida; na inserção de reserva resultam em `DomainError`. Uma mudança de driver/formato exige revalidar as regressões.
+- **Política de contenção definida nesta revisão:** manter transações atuais, esperar até o timeout e traduzir `SQLITE_BUSY`/`SQLITE_LOCKED` para `StorageBusyError`, sem retry automático. Outros erros operacionais propagam. O Passo 2 configura `busy_timeout=5000` e WAL, que apenas amenizam contenção temporária; a garantia de unicidade vem do índice, não do timeout.
 
 ### Alternativas consideradas
 - **Verificar disponibilidade e depois gravar:** rejeitada — *check-then-act* sujeito a condição de corrida.
@@ -435,7 +449,7 @@ As regras do condomínio precisam funcionar sem LLM e sem expor detalhes de pers
 
 ### Decisão
 - `ReservationService` e `VisitorService` (`app/services/`) concentram os casos de uso; repositories continuam só com persistência (ganharam consultas restritas ao apartamento e de existência).
-- Erros de domínio em `app/domain/errors.py` (`DomainError` e derivados). Na inserção de reserva, `IntegrityError` é convertido: conflito de área/data → `AreaUnavailableError`; colisão de código → nova tentativa (máx. 5 por padrão) → `ReservationCodeGenerationError`. Isso não constitui tradução geral de falhas de persistência.
+- Erros de domínio em `app/domain/errors.py` (`DomainError` e derivados). Na inserção de reserva, `IntegrityError` é convertido: conflito de área/data → `AreaUnavailableError`; colisão de código → nova tentativa (máx. 5 por padrão) → `ReservationCodeGenerationError`. Isso se aplica à inserção de reserva, não constitui tradução geral de falhas de persistência. `service_session` traduz contenção nos Services de reservas e visitantes; outros erros operacionais continuam detectáveis.
 - `request_*` decide (gratuito → cria; pago/visitante → `REQUIRES_CONFIRMATION`, sem gravar); `create_confirmed_*` são funções internas separadas. Não existe parâmetro `confirmed`.
 - Reserva alheia é tratada como inexistente (`ReservationNotFoundError`).
 - `request_reservation` também consulta disponibilidade antes de pedir confirmação (apenas UX; o banco segue sendo a garantia).
@@ -444,8 +458,8 @@ As regras do condomínio precisam funcionar sem LLM e sem expor detalhes de pers
 ### Consequências
 Os services gerenciam suas sessões. Na criação de reservas, a sessão de validação termina antes da sessão de inserção; cada tentativa usa uma nova sessão. No cancelamento e na autorização confirmada de visitante, validação e escrita ocorrem na mesma sessão. Portanto, a separação entre leitura e escrita não é uma propriedade de todos os casos de uso.
 
-### Pendência comprovada do Passo 3
-Na auditoria de 11/10/2026, uma transação concorrente `BEGIN IMMEDIATE` mantida em SQLite temporário além de `busy_timeout=5000` fez criar reserva, cancelar reserva e autorizar visitante propagarem `sqlalchemy.exc.OperationalError` (`database is locked`). Há rollback, mas não tradução desse erro para domínio. Corrigir essa fronteira e incluir teste de regressão antes do aceite integral. Repetição automática é uma política ainda a decidir; banco ocupado não equivale a área ocupada.
+### Pendência do Passo 3 corrigida nesta revisão
+Na auditoria de 11/10/2026, uma transação concorrente `BEGIN IMMEDIATE` mantida em SQLite temporário além de `busy_timeout=5000` fez criar reserva, cancelar reserva e autorizar visitante propagarem `sqlalchemy.exc.OperationalError` (`database is locked`). A correção em `app/services/_persistence.py` fecha a sessão e traduz contenção para `StorageBusyError`; as tools retornam `temporarily_unavailable`. A regressão em `tests/test_persistence_failures.py` cobre criação, cancelamento, visitante, ausência de efeitos parciais e recuperação após liberar o lock. Sem retry automático; banco ocupado não equivale a área ocupada.
 
 ---
 
@@ -454,7 +468,7 @@ Na auditoria de 11/10/2026, uma transação concorrente `BEGIN IMMEDIATE` mantid
 | Tema | Onde |
 |---|---|
 | Validação da escolha inicial `sub_agents` + transferência e eventual revisão | ADR-002 |
-| Recuperação e tradução de banco ocupado; eventual política de repetição e revisão das transações | ADR-008 / ADR-013 |
+| Validação do tratamento de contenção na futura integração HTTP | ADR-008 / ADR-013 |
 | Granularidade e método de seleção de trechos do regulamento | ADR-009 |
 | Relação entre `id` de confirmação do backend e identificador do ADK | ADR-012 |
 | Ordem e recuperação de falhas entre confirmação, retomada e gravação | ADR-012 |

@@ -1,7 +1,28 @@
 # Garantias arquiteturais — Residencial Aurora
 
-> **Status do documento (11/10/2026):** requisitos da arquitetura alvo e evidências parciais dos Passos 2 e 3. As estratégias descrevem o comportamento exigido do sistema completo; não constituem declaração de implementação ponta a ponta.
-> Persistência e services existem. API, tools, agentes e controle de confirmações permanecem planejados. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
+> **Status do documento (11/10/2026):** requisitos da arquitetura alvo e evidências dos Passos 2 a 5, incluindo regressões de integridade e contenção. As estratégias descrevem o comportamento exigido do sistema completo; não constituem declaração de implementação ponta a ponta.
+> Persistência, Services e seis FunctionTools existem. API, agentes, Tool Confirmation, controle persistido de confirmações e consulta do regulamento permanecem planejados. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
+
+## Estado atual e evidências
+
+| Escopo | Implementação e evidência | Limite |
+|---|---|---|
+| Passo 2 | Modelos, repositories, reset e fábrica `DatabaseSessionService`; verificações históricas descritas ao final | Persistência mínima não comprova continuidade de conversa ou confirmação |
+| Passo 3 | 31 testes de Services | Operações `create_confirmed_*` exigem chamador confiável; não validam aprovação externa |
+| Passo 4 | 15 testes de concorrência | Exclusividade comprovada no domínio, ainda sem HTTP/confirmadores concorrentes |
+| Passo 5 | 31 testes de tools e schemas | Contexto simulado; duas chamadas também passam por `FunctionTool.run_async`; sem Agent/Runner |
+| Correções | 18 regressões de integridade e contenção | Locks reais nas escritas; códigos estendidos e tradução nas seis tools também exercitados por injeção de erro |
+
+A suíte atual soma **95 testes aprovados**. A execução completa mais recente usa
+`.venv\Scripts\python.exe -B -m pytest -q -p no:cacheprovider`, com bancos temporários,
+sem Gemini. A auditoria atual não executa `uv sync` nem restaura bancos locais.
+Os 31 testes e comandos citados na seção histórica dos Passos 2 e 3 não são o
+inventário da suíte atual.
+
+`requires_confirmation` não cria uma confirmação pendente: não existem tabela,
+ID, endpoint ou retomada. As cinco garantias do produto completo **não estão
+integralmente validadas**. As seções de estratégia abaixo descrevem a arquitetura
+alvo; apenas os componentes marcados como implementados representam o código atual.
 
 As cinco garantias abaixo são os requisitos críticos do projeto. Todas seguem o princípio central:
 
@@ -62,9 +83,9 @@ Ações que não geram cobrança nem liberam acesso (reserva de área sem taxa, 
 
 ### Componentes e estado de implementação
 
-> **Estado atual:** a regra de taxa e a separação request/execução estão nos services. Os demais mecanismos abaixo são planejados; os arquivos de tools, API e runtime são estruturas iniciais e a tabela de confirmações não existe.
+> **Estado atual:** a regra de taxa e a separação request/execução estão nos services. Os demais mecanismos abaixo são planejados; API e runtime são estruturas iniciais e a tabela de confirmações não existe. As tools implementadas retornam `requires_confirmation` sem gravar; Tool Confirmation está desativada.
 
-- `app/tools/reservas.py` e `app/tools/visitantes.py` — marcação das tools que exigem confirmação;
+- **Implementado:** `app/tools/reservations.py` e `app/tools/visitors.py` — retorno `requires_confirmation`, sem efeito de negócio para reserva paga e visitante. **Planejado:** integração com Tool Confirmation; os módulos antigos `reservas.py` e `visitantes.py` são placeholders;
 - `app/api/confirmacoes.py` — endpoint, validação de `PENDING` na sessão, resposta `409`;
 - `app/runtime/adk_runtime.py` — `resume_confirmation()` (retomada da execução no ADK);
 - `app/database/schema.py` e `app/repositories/` — tabela `confirmacoes` e transição atômica de estado;
@@ -121,8 +142,8 @@ Existe uma exceção controlada: para verificar se uma data está livre é preci
 > O estado atual é explicitado nos itens implementados; os demais itens descrevem a integração planejada.
 
 - `app/api/sessoes.py` + `app/runtime/adk_runtime.py` — gravação do apartamento no estado ao criar a sessão (`create_session()`);
-- `app/tools/reservas.py` e `app/tools/visitantes.py` — leitura da identidade do contexto; assinaturas sem apartamento;
-- `app/services/reservation_service.py` e `visitor_service.py` — validação de propriedade e filtros por apartamento já implementados no Passo 3; origem da identidade nas tools ainda planejada;
+- **Implementado (Passo 5):** `app/tools/context.py` (`get_session_apartment`), `app/tools/reservations.py` e `app/tools/visitors.py` — o apartamento é lido **somente** de `tool_context.state["apartamento"]`, sem valor padrão; sessão sem apartamento retorna `invalid_session`. Nenhuma Tool recebe apartamento, `confirmed`, `force`, `override` ou `bypass`, e `tool_context` não aparece no schema visível ao modelo (`tests/test_tool_schemas.py`). Testes (`tests/test_reservation_tools.py`, `test_visitor_tools.py`) comprovam isolamento entre 101 e 302 em listagem, cancelamento (resposta neutra `not_found`) e disponibilidade (somente booleano). Escopo da prova: Tools chamadas com `ToolContext` simulado; **não** há ainda sessão real de API nem Agent, então a proteção ponta a ponta continua pendente;
+- `app/services/reservation_service.py` e `visitor_service.py` — validação de propriedade e filtros por apartamento já implementados no Passo 3; recebem identidade extraída pelas tools; criação e proteção do estado pela futura API continuam planejadas;
 - `app/repositories/*` — consultas usadas pelos services para dados do morador já filtram por apartamento. Existem também consultas globais para infraestrutura/verificação; disponibilidade exposta pelo service devolve apenas booleano;
 - `app/agents/*` — instruções dos agentes **não** carregam identidade nem regra de segurança.
 
@@ -217,8 +238,8 @@ O regulamento é longo (`dados/regulamento.md`, organizado em capítulos e artig
 
 > O estado atual é explicitado nos itens implementados; os demais itens descrevem a integração planejada.
 
-- `app/services/regulation_service.py` — leitura do arquivo e seleção de trechos;
-- `app/tools/regulamento.py` — tool com retorno limitado;
+- **Planejado:** `app/services/regulation_service.py` — leitura do arquivo e seleção de trechos; atualmente apenas docstring;
+- **Planejado:** `app/tools/regulamento.py` — tool com retorno limitado; atualmente apenas docstring;
 - `app/agents/regulamento.py` — instruções **sem** o texto do regulamento;
 - `app/agents/concierge.py` — instruções **sem** o texto do regulamento.
 
@@ -267,9 +288,10 @@ Dois moradores podem pedir a mesma área na mesma data — e aprovar a cobrança
 
 - **Implementado:** `app/database/models.py` define índice parcial e PK do código; `schema.py` cria o esquema.
 - **Implementado:** `app/repositories/reservation_repository.py` — inserção e rollback em violação de integridade.
-- **Implementado:** `app/services/reservation_service.py` (`create_confirmed_reservation` → `_insert_reservation`) abre sessão própria por tentativa, grava e confirma; em `IntegrityError` diagnostica em sessão nova: reserva ATIVA para área/data → `AreaUnavailableError`; código já existente → novo código (máx. 5 tentativas); qualquer outro caso → `DomainError` genérico, sem mascarar como indisponibilidade.
-- **Pendente:** `OperationalError` por banco ocupado além do `busy_timeout` ainda escapa do Service (não ocorre no cenário de corrida testado).
-- **Planejado:** `app/tools/reservas.py` — resposta limitada ao modelo e integração HTTP.
+- **Implementado:** `app/services/reservation_service.py` (`create_confirmed_reservation` → `_insert_reservation`) abre sessão própria por tentativa, grava e confirma; em `IntegrityError` classifica o código SQLite e as colunas da violação original: UNIQUE de área/data → `AreaUnavailableError`; PK de código → novo código (máx. 5 tentativas); qualquer outro caso → `DomainError` genérico. Não consulta o estado posterior para diagnosticar.
+- **Corrigido:** `SQLITE_BUSY`/`SQLITE_LOCKED`, inclusive códigos estendidos, viram `StorageBusyError` após encerrar a sessão. As seis tools retornam `temporarily_unavailable`, sem SQL. Outros erros operacionais não são ocultados.
+- **Implementado (Passo 5):** `app/tools/reservations.py` — `solicitar_reserva` devolve `created` (área gratuita) ou `requires_confirmation` (área paga, sem gravar); conflito vira `unavailable` sem dados de terceiros.
+- **Planejado:** integração HTTP e Tool Confirmation.
 
 ### Por que não depende do LLM
 
@@ -283,9 +305,31 @@ Dois moradores podem pedir a mesma área na mesma data — e aprovar a cobrança
 - Duas sessões (apartamentos 101 e 201) pedem o salão para a mesma data; ambas ficam com confirmação pendente.
 - Disparar as **duas aprovações simultaneamente** (por exemplo, dois `curl` em paralelo).
 - Esperado: as duas respostas HTTP são `200`; somando os dois apartamentos, existe **exatamente uma** reserva ativa daquele salão naquela data.
-- Teste direto de camada de dados com várias gravações concorrentes (sem passar pelo modelo).
+- **Já validado no domínio:** teste direto com várias gravações concorrentes (sem modelo), detalhado abaixo.
 - Verificar que a perdedora não vê o código nem o apartamento da vencedora.
 - Verificar que, após cancelar, uma nova reserva da mesma área/data é possível e **recebe código novo**.
+
+---
+
+## Evidências do Passo 5 (FunctionTools)
+
+Registro público em `app/tools/__init__.py`; adaptadores em `reservations.py` e
+`visitors.py`; montagem dos Services em `app/services/provider.py`.
+
+| Tool | Parâmetros visíveis ao modelo | Método do Service |
+|---|---|---|
+| `listar_minhas_reservas` | nenhum | `list_active_reservations` |
+| `verificar_disponibilidade` | `area_id`, `data` | `is_available` |
+| `solicitar_reserva` | `area_id`, `data` | `request_reservation` |
+| `cancelar_minha_reserva` | `codigo` | `cancel_reservation` |
+| `listar_meus_visitantes` | nenhum | `list_visitors` |
+| `solicitar_autorizacao_visitante` | `nome`, `data` | `request_authorization` |
+
+- `tests/test_tool_schemas.py`: seis tools, schemas sem identidade, confirmação ou parâmetros de bypass; `tool_context` é injetado e não exposto; operações `create_confirmed_*` não são tools; confirmação ADK desativada.
+- `tests/test_reservation_tools.py`: identidade do contexto, cancelamento próprio/alheio, disponibilidade sem proprietário, criação gratuita, reserva paga sem gravação, entradas inválidas e contexto ausente. `test_function_tool_run_async_injects_context` exercita duas FunctionTools do ADK, com contexto simulado.
+- `tests/test_visitor_tools.py`: isolamento entre apartamentos, solicitação sem gravação, entrada inválida e ausência de contexto.
+- `get_session_apartment` verifica presença e formato básico, não autentica o usuário. Services validam a existência do apartamento nas operações pessoais. Disponibilidade exige identidade no estado, mas não consulta se o apartamento existe; retorna apenas booleano. A futura criação de sessão deverá validar a identidade.
+- Nenhum teste deste grupo inspeciona eventos de conversa real, API ou retomada de confirmação.
 
 ---
 
@@ -295,26 +339,28 @@ Testes em `tests/test_reservation_concurrency.py` (`uv run pytest tests/test_res
 
 - **Garantia final:** índice único parcial `uq_reservas_area_data_ativa` em `(area, data) WHERE status = 'ATIVA'`, definido em `app/database/models.py`. `test_database_rejects_two_active_even_bypassing_service` prova que o banco rejeita ATIVA+ATIVA mesmo sem o Service e aceita CANCELADA+ATIVA.
 - **Corrida 101 × 201** (salão, 2030-05-11): `test_only_one_concurrent_reservation_wins` e `test_concurrent_loser_gets_area_unavailable` — 1 sucesso, 1 `AreaUnavailableError` (sem texto de persistência, código ou apartamento), 1 reserva ATIVA.
-- **Sem `is_available()`:** `test_concurrency_does_not_depend_on_availability_check` — nenhuma consulta de disponibilidade antes do INSERT; só o perdedor consulta, depois do conflito, para diagnóstico.
+- **Sem `is_available()`:** `test_concurrency_does_not_depend_on_availability_check` — nenhuma consulta de disponibilidade antes do INSERT nem consulta posterior para diagnóstico; classificação pela exceção original.
 - **Repetição:** `test_repeated_concurrency_race` — 25 datas, ordem de disparo alternada; 0 falhas, 0 duplicidades.
 - **Rollback:** `test_conflict_rollback_allows_next_transaction` e `test_repository_rollback_keeps_session_usable_after_integrity_error` — sem `PendingRollbackError`; nova operação funciona.
 - **Cancelamento:** `test_cancelled_reservation_releases_area_date` — 101 ATIVA → 201 recusada → 101 CANCELADA → 201 ATIVA.
 - **Códigos:** `test_reservation_codes_remain_unique_under_concurrency`, `test_code_collision_retries_with_new_code_and_is_not_area_unavailable`, `test_area_conflict_is_not_retried_as_code_collision` e `test_unexpected_integrity_error_is_not_masked`.
 - **SQLite:** `test_sqlite_pragmas_active_on_test_database` — `journal_mode=wal`, `busy_timeout=5000`, `foreign_keys=1`.
-- **Fora do escopo / pendente:** `OperationalError` (`database is locked`) por lock prolongado além do timeout continua sem tradução para domínio; validação concorrente via API + confirmações pertence a etapas posteriores.
+- **Pendente:** validação concorrente via API + confirmações. Contenção prolongada no domínio e respostas das tools estão cobertas em `tests/test_persistence_failures.py`.
 
 ---
 
 ## Evidências do Passo 3 (regras de negócio sem IA)
 
-Testes em `tests/` (`uv run pytest`), sem Gemini, ADK, ToolContext ou API:
+Testes de domínio em `tests/test_reservation_service.py` e `tests/test_visitor_service.py`, sem Gemini, Agent, ToolContext ou API. A suíte completa inclui também os testes ADK do Passo 5:
 
-- **Garantia 2 (isolamento, nível Service):** `list_active_reservations` e `list_visitors` filtram por apartamento na consulta SQL; `cancel_reservation` busca apenas entre as reservas ATIVAS do próprio apartamento, então reserva alheia e inexistente geram o mesmo `ReservationNotFoundError`, sem apartamento, código ou morador na mensagem. `is_available` devolve só `bool`. O parâmetro `apartment` é contexto confiável da aplicação; sua origem em `session.state` ainda **não** existe.
+- **Garantia 2 (isolamento, nível Service):** `list_active_reservations` e `list_visitors` filtram por apartamento na consulta SQL; `cancel_reservation` busca apenas entre as reservas ATIVAS do próprio apartamento, então reserva alheia e inexistente geram o mesmo `ReservationNotFoundError`, sem apartamento, código ou morador na mensagem. `is_available` devolve só `bool`. O parâmetro `apartment` é contexto confiável da aplicação; no Passo 5 as tools passaram a extraí-lo de `tool_context.state`. A criação da sessão pela API ainda não existe.
 - **Garantia 1 (regra de cobrança, nível Service):** solicitação válida de área paga disponível ou autorização de visitante retorna `REQUIRES_CONFIRMATION` sem gravar. Para essas ações, a gravação ocorre em `create_confirmed_reservation` / `create_confirmed_authorization`, operações destinadas à aplicação confiável (não há parâmetro `confirmed`). Elas não validam prova de aprovação: essa responsabilidade será da integração futura. Área gratuita grava diretamente em `request_reservation`. **Tool Confirmation do ADK, `confirmation_id` e rota de confirmações NÃO foram implementados**; a garantia ponta a ponta continua pendente.
 - **Garantia 5 (concorrência):** conflito de área/data vira `AreaUnavailableError`; teste concorrente termina com exatamente uma reserva ATIVA. A proteção final é o índice do banco.
 - **Integridade de reserva:** cancelar muda `status` para `CANCELADA` sem apagar; códigos são gerados pelo sistema (`RSV-` + 8 hex) e a PK permanente impede reutilizar código cancelado.
 
 ## Validação dos Passos 2 e 3 em 11/10/2026
+
+> Registro histórico, preservado para rastreabilidade. Os comandos desta seção não foram repetidos na revisão documental; o estado e a suíte atuais estão na abertura.
 
 ### Passo 2 — persistência
 
@@ -334,5 +380,17 @@ Os scripts de domínio restauram o banco configurado; para repetir a auditoria p
 - `test_concurrent_many_single_winner`: seis apartamentos disputam a churrasqueira; verifica um sucesso e cinco `AreaUnavailableError`. Não conta as linhas finais nem inspeciona mensagens de erro.
 - A ausência de dados de terceiros nas mensagens é verificada separadamente em `test_occupied_date_raises_without_leak` e nos testes de cancelamento alheio; não é uma asserção dos testes concorrentes.
 - `git diff HEAD -- dados`: vazio na auditoria, comprovando ausência de alteração local em relação ao HEAD; não comprova identidade com um repositório remoto base.
-- **Pendência comprovada:** em verificação adicional sobre SQLite temporário, manter `BEGIN IMMEDIATE` numa segunda conexão além dos 5 segundos de espera fez criação de reserva, cancelamento e autorização de visitante propagarem `sqlalchemy.exc.OperationalError` (`database is locked`). Essa verificação manual ainda não integra a suíte.
-- **Conclusão:** regras funcionais e concorrência de reservas nos cenários testados estão validadas. O aceite integral do Passo 3 depende de traduzir falhas esperadas de armazenamento em erros de domínio, preservar rollback e adicionar teste de regressão. API/ADK não são exigências desta etapa.
+- **Falha histórica (corrigida nesta revisão):** em verificação adicional sobre SQLite temporário, manter `BEGIN IMMEDIATE` numa segunda conexão além dos 5 segundos de espera fez criação de reserva, cancelamento e autorização de visitante propagarem `sqlalchemy.exc.OperationalError` (`database is locked`). A regressão agora integra `tests/test_persistence_failures.py`.
+- **Conclusão:** regras funcionais e concorrência de reservas nos cenários testados estão validadas. A pendência de banco ocupado foi corrigida com `StorageBusyError`, rollback e testes de regressão; isso não representa tradução indiscriminada de qualquer falha de armazenamento. API/ADK não são exigências desta etapa.
+
+
+## Regressões de integridade e contenção (11/10/2026)
+
+`tests/test_persistence_failures.py` acrescenta 18 casos: CHECK combinado com
+área/data ou código já existentes; cancelamento entre conflito e classificação;
+lock real além de 5000 ms em criação, cancelamento e autorização de visitante,
+incluindo chamadas pelas tools de escrita; tradução nas seis tools; distinção
+entre contenção SQLite (inclusive códigos estendidos) e outros erros operacionais.
+A suíte completa passou: **95 aprovados, zero falhas**. Execução pelo Python da
+`.venv`, com `-B -m pytest -q -p no:cacheprovider`, sem Gemini, em bancos temporários.
+Isso não comprova integração HTTP, Agent ou Tool Confirmation.

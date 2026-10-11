@@ -19,6 +19,7 @@ from app.domain.errors import InvalidVisitorNameError
 from app.domain.types import RequestStatus, VisitorAuthorizationRequestResult, VisitorView
 from app.repositories.visitor_repository import VisitorRepository
 from app.services._common import require_apartment
+from app.services._persistence import service_session
 
 
 def _clean_name(name: str) -> str:
@@ -33,7 +34,7 @@ class VisitorService:
         self._factory = session_factory
 
     async def list_visitors(self, apartment: str) -> list[VisitorView]:
-        async with self._factory() as session:
+        async with service_session(self._factory) as session:
             numero = await require_apartment(session, apartment)
             rows = await VisitorRepository(session).list_by_apartment(numero)
             return [VisitorView(nome=v.nome, data=v.data) for v in rows]
@@ -41,7 +42,7 @@ class VisitorService:
     async def request_authorization(
         self, apartment: str, visitor_name: str, date: dt.date
     ) -> VisitorAuthorizationRequestResult:
-        async with self._factory() as session:
+        async with service_session(self._factory) as session:
             await require_apartment(session, apartment)
         return VisitorAuthorizationRequestResult(
             status=RequestStatus.REQUIRES_CONFIRMATION,
@@ -54,7 +55,7 @@ class VisitorService:
     ) -> VisitorView:
         """INTERNA: executa após confirmação externa validada. Não exposta ao modelo."""
         name = _clean_name(visitor_name)
-        async with self._factory() as session:
+        async with service_session(self._factory) as session:
             try:
                 numero = await require_apartment(session, apartment)
                 await VisitorRepository(session).insert(

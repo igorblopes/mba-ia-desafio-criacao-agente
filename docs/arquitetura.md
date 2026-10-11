@@ -1,15 +1,18 @@
 # Arquitetura — Residencial Aurora
 
-> **Status do documento (11/10/2026):** arquitetura alvo com persistência do Passo 2 e regras de negócio do Passo 3 implementadas. O estado comprovado está descrito abaixo; os fluxos de agentes, tools, HTTP e confirmação são planejados.
+> **Status do documento (11/10/2026):** arquitetura alvo e estado implementado até o Passo 5, incluindo as correções de integridade e contenção. Persistência, Services e seis FunctionTools existem; agentes, HTTP, Tool Confirmation e regulamento continuam planejados.
 > Mudanças de decisão são registradas em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md). Decisão aceita não significa implementação ou validação ponta a ponta.
 
-## Estado atual dos Passos 2 e 3
+## Estado atual dos Passos 2 a 5
 
 - **Passo 2 — persistência validada:** modelos em `app/database/models.py`, criação do esquema em `schema.py`, conexão e sessões em `connection.py`, repositories e restauração em `scripts/reset.py`. O banco de domínio contém apartamentos, áreas, reservas e visitantes; a tabela de confirmações ainda não existe. Taxas são armazenadas em centavos inteiros.
 - **Sessão ADK:** `app/runtime/session_service.py` cria `DatabaseSessionService` separado do domínio. Sessão, estado e evento mínimo sobreviveram à troca de processo; isso não comprova Runner, conversa ou retomada de confirmação.
-- **Passo 3 — regras funcionais validadas, aceite integral pendente:** services de reservas e visitantes, DTOs e erros em `app/domain/`, testes isolados em `tests/`. A criação de reserva separa validação e escrita; cancelamento e autorização de visitante validam e escrevem na mesma sessão. Erros de banco ocupado ainda escapam como `OperationalError` (RT-003).
-- **Ainda planejados:** agentes, tools, rotas, `AdkRuntime`, controle persistido de confirmações e consulta do regulamento. Os arquivos correspondentes são estruturas iniciais sem essas funcionalidades.
-- Resultados e limites da validação: [garantias.md](garantias.md#validação-dos-passos-2-e-3-em-11102026).
+- **Passo 3 — regras funcionais validadas; contenção corrigida:** services de reservas e visitantes, DTOs e erros em `app/domain/`, testes isolados em `tests/`. A criação de reserva separa validação e escrita; cancelamento e autorização de visitante validam e escrevem na mesma sessão. Contenção SQLite é traduzida em `StorageBusyError`, com rollback e resposta segura nas tools (RT-003; `tests/test_persistence_failures.py`).
+- **Passo 4 — validado no domínio:** índice único parcial, sessões independentes, rollback, colisão de código, 25 corridas repetidas e classificação da violação SQLite original. Banco ocupado vira `StorageBusyError`; não há retry automático de contenção.
+- **Passo 5 — implementado e validado no escopo das tools:** `app/tools/reservations.py` e `visitors.py` expõem seis `FunctionTool`, registradas em `app/tools/__init__.py`. O helper `context.py` extrai identidade do estado; `app/services/provider.py` fornece os Services. Schemas e testes com contexto simulado comprovam a fronteira; a API ainda não cria sessões de moradores.
+- **Ainda planejados:** agentes, rotas, `AdkRuntime`, Tool Confirmation, controle persistido de confirmações e consulta do regulamento. Os respectivos arquivos são estruturas iniciais. `app/tools/reservas.py` e `visitantes.py` também são placeholders antigos; as implementações estão nos módulos em inglês.
+- **Limite de confirmação:** `requires_confirmation` é apenas um resultado estruturado. Não cria pendência persistida, identificador de confirmação ou retomada ADK.
+- Resultados e limites da validação: [garantias.md](garantias.md#estado-atual-e-evidências).
 
 Documentos relacionados:
 
@@ -37,7 +40,7 @@ Tecnologias definidas:
 | Linguagem | Python 3.12 (`>=3.12,<3.13` em `pyproject.toml`) |
 | Gerenciador de projeto | `uv` (`pyproject.toml` e `uv.lock` versionados) |
 | Framework de agentes | `google-adk[db]==2.9.1`, fixado no projeto; agentes ainda planejados |
-| Modelo | Gemini; modelo específico escolhido no Passo 1 e centralizado em `GEMINI_MODEL` |
+| Modelo | Gemini planejado, configurável por `GEMINI_MODEL`; não há modelo específico definido em `app/config.py` ou `.env.example` |
 | API | FastAPI |
 | Armazenamento | SQLite (dois bancos separados) |
 | Estrutura de agentes | Agente principal + três especialistas |
@@ -69,6 +72,8 @@ ação acontece ou é recusada
 ---
 
 ## 3. Diagrama da arquitetura
+
+> Diagramas da arquitetura alvo. A existência de uma caixa não indica implementação; o inventário atual está na abertura.
 
 ### 3.1 Visão em camadas
 
@@ -230,7 +235,7 @@ cancelar_reserva(apartamento, codigo)   # apartamento escolhido pelo modelo
 
 ## 6. Identidade e sessão
 
-O apartamento autenticado é definido **uma única vez, na criação da sessão** e representa o morador autenticado (a autenticação em si está fora de escopo; o apartamento recebido na criação da sessão é tratado como autenticado).
+No fluxo completo planejado, o apartamento autenticado será definido **uma única vez, na criação da sessão** e representa o morador autenticado (a autenticação em si está fora de escopo; o apartamento recebido na criação da sessão é tratado como autenticado).
 
 ```text
 session.state["apartamento"] = "101"     # conceitual
@@ -247,6 +252,8 @@ Complemento importante (ver [Garantia 2](garantias.md#garantia-2--cada-sessão-p
 ---
 
 ## 7. Fluxo de uma requisição
+
+> Fluxos planejados: nenhuma rota HTTP ou execução de Agent/Runner está implementada.
 
 ### 7.1 Mensagem comum (sem confirmação)
 
@@ -372,7 +379,7 @@ codigo: RSV-1234
 status: CANCELADA
 ```
 
-Motivo: o código de uma reserva **nunca pode ser reutilizado**, inclusive depois de cancelamento. A unicidade do código é garantida pelo sistema e, preferencialmente, reforçada por **constraint no banco**.
+Motivo: o código de uma reserva **nunca pode ser reutilizado**, inclusive depois de cancelamento. A unicidade do código é garantida pelo sistema e reforçada pela **chave primária `Reserva.codigo` já implementada**.
 
 ### 8.4 Concorrência
 
@@ -478,7 +485,7 @@ O restante da aplicação **não** deve depender dos detalhes internos da retoma
 
 ## 11. Contrato da API (resumo)
 
-Resumo das rotas já definidas para o projeto; o comportamento detalhado pertence ao enunciado do desafio.
+Contrato planejado das rotas, ainda não implementadas; o comportamento detalhado pertence ao enunciado do desafio.
 
 | Rota | Função |
 |---|---|
@@ -497,7 +504,7 @@ Rotas com `{session_id}` respondem `404` se a sessão não existir.
 
 ## 12. Estrutura planejada do repositório
 
-> **Proposta inicial de organização, não inventário completo.** O estado atual está na abertura deste documento. A implementação também inclui `app/domain/`, `services/_common.py`, `repositories/apartment_repository.py`, `runtime/session_service.py`, `database/models.py`, scripts de verificação e `tests/`.
+> **Proposta inicial de organização, não inventário completo.** O estado atual está na abertura deste documento. A implementação também inclui `app/domain/`, `services/_common.py`, `services/_persistence.py`, `services/provider.py`, `tools/context.py`, `tools/reservations.py`, `tools/visitors.py`, `repositories/apartment_repository.py`, `runtime/session_service.py`, `database/models.py`, scripts de verificação e `tests/`. Os módulos `tools/reservas.py` e `tools/visitantes.py` da proposta abaixo são placeholders, não implementações alternativas.
 
 ```text
 residencial-aurora/
@@ -573,4 +580,4 @@ Resumo; o detalhe está em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.
 - Validação da escolha inicial `sub_agents` + transferência; eventual revisão da topologia se a retomada falhar.
 - Relação entre o `id` da confirmação do backend e o identificador da chamada pendente no ADK.
 - Granularidade e método de seleção de trechos do regulamento.
-- Política de recuperação e tradução de falhas de banco ocupado nos services. Já implementados: WAL, `busy_timeout=5000` e índice único parcial `uq_reservas_area_data_ativa`; código `RSV-` + 8 hex com até cinco tentativas, protegido pela PK e pelo histórico preservado (ADRs 008 e 011).
+- Contenção: espera limitada a 5000 ms, sem retry automático; `SQLITE_BUSY`/`SQLITE_LOCKED` viram `StorageBusyError` e as tools devolvem `temporarily_unavailable`. Integração HTTP ainda pendente. Já implementados: WAL, `busy_timeout=5000` e índice único parcial `uq_reservas_area_data_ativa`; código `RSV-` + 8 hex com até cinco tentativas, protegido pela PK e pelo histórico preservado (ADRs 008 e 011).
