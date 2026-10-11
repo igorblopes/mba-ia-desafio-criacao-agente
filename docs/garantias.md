@@ -311,6 +311,17 @@ Dois moradores podem pedir a mesma área na mesma data — e aprovar a cobrança
 
 ---
 
+## Evidências do Passo 6 (agentes principal e especialistas)
+
+- **Concierge sem tools de domínio:** `test_concierge_has_no_business_tools`.
+- **Menor privilégio:** `test_reservation_agent_has_only_reservation_tools` e `test_visitor_agent_has_only_visitor_tools`; nenhum agente tem `create_confirmed_*` nem tool de confirmação (`test_confirmed_internal_operations_are_not_exposed`).
+- **Apartamento continua vindo do `ToolContext`:** os agentes reutilizam as mesmas FunctionTools do Passo 5 (sem parâmetro de apartamento). `tests/test_agent_runtime_scripted.py` roda Runner, transferência, Tools, Services e banco reais com **modelo roteirizado**: sessão 101 nunca recebe dados do 302; `cancelar_minha_reserva("RSV-4821")` na sessão 101 retorna `not_found` e a reserva do 302 permanece; reserva paga e visitante retornam `requires_confirmation` sem gravar, inclusive com texto de "bypass".
+- **Regulamento fora do prompt:** `test_root_instruction_does_not_contain_regulation_content` e `test_agent_modules_do_not_read_regulation_file`.
+- **Agentes não acessam banco/Repository/Service:** `test_agent_modules_do_not_touch_database_repositories_or_services`.
+- **Limites:** o modelo roteirizado prova a mecânica (transferência, eventos de tool call/response, identidade), **não** o roteamento do Gemini. Os testes em `tests/integration/` cobrem isso, mas só valem quando executados com `GOOGLE_API_KEY` e `GEMINI_MODEL`. Prompt injection pode afetar a interpretação do modelo, mas não altera `session.state["apartamento"]`, não cria Tool privilegiada e não contorna Service nem banco. A Garantia 1 **não** está completa: Tool Confirmation real não existe.
+
+---
+
 ## Evidências do Passo 5 (FunctionTools)
 
 Registro público em `app/tools/__init__.py`; adaptadores em `reservations.py` e

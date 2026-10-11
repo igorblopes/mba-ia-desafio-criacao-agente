@@ -265,6 +265,13 @@ Uma confirmação já respondida (aprovada ou negada) não deve poder ser usada 
 
 ---
 
+## Observações do Passo 6
+
+- RT-001 e RT-002 **continuam abertos**: Tool Confirmation real e retomada não foram implementadas. A transferência Concierge → especialista foi exercitada apenas com Runner real e modelo roteirizado; o comportamento de roteamento com Gemini real é instável por natureza e deve ser observado via `pytest -m integration`.
+- RT-004: o cenário 101 × 302 foi exercitado de ponta a ponta no ADK com modelo roteirizado; permanece pendente a execução com Gemini real e via API.
+
+---
+
 ## Pontos que precisarão de decisão durante a implementação
 
 Questões que a validação dos riscos acima deve responder:

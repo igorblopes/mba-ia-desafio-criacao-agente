@@ -22,3 +22,7 @@ dev = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: usa Gemini real (requer GOOGLE_API_KEY e GEMINI_MODEL); rode com -m integration",
+]

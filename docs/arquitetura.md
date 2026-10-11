@@ -1,6 +1,6 @@
 # Arquitetura — Residencial Aurora
 
-> **Status do documento (11/10/2026):** arquitetura alvo e estado implementado até o Passo 5, incluindo as correções de integridade e contenção. Persistência, Services e seis FunctionTools existem; agentes, HTTP, Tool Confirmation e regulamento continuam planejados.
+> **Status do documento (11/10/2026):** arquitetura alvo e estado implementado até o Passo 5, incluindo as correções de integridade e contenção. Persistência, Services, seis FunctionTools e a topologia Concierge + Reservas + Visitantes existem; HTTP, Tool Confirmation e o agente de regulamento continuam planejados.
 > Mudanças de decisão são registradas em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md). Decisão aceita não significa implementação ou validação ponta a ponta.
 
 ## Estado atual dos Passos 2 a 5
@@ -10,7 +10,8 @@
 - **Passo 3 — regras funcionais validadas; contenção corrigida:** services de reservas e visitantes, DTOs e erros em `app/domain/`, testes isolados em `tests/`. A criação de reserva separa validação e escrita; cancelamento e autorização de visitante validam e escrevem na mesma sessão. Contenção SQLite é traduzida em `StorageBusyError`, com rollback e resposta segura nas tools (RT-003; `tests/test_persistence_failures.py`).
 - **Passo 4 — validado no domínio:** índice único parcial, sessões independentes, rollback, colisão de código, 25 corridas repetidas e classificação da violação SQLite original. Banco ocupado vira `StorageBusyError`; não há retry automático de contenção.
 - **Passo 5 — implementado e validado no escopo das tools:** `app/tools/reservations.py` e `visitors.py` expõem seis `FunctionTool`, registradas em `app/tools/__init__.py`. O helper `context.py` extrai identidade do estado; `app/services/provider.py` fornece os Services. Schemas e testes com contexto simulado comprovam a fronteira; a API ainda não cria sessões de moradores.
-- **Ainda planejados:** agentes, rotas, `AdkRuntime`, Tool Confirmation, controle persistido de confirmações e consulta do regulamento. Os respectivos arquivos são estruturas iniciais. `app/tools/reservas.py` e `visitantes.py` também são placeholders antigos; as implementações estão nos módulos em inglês.
+- **Passo 6 — topologia multiagente implementada:** `app/agents/concierge.py` (root), `reservations.py` e `visitors.py`, com o modelo vindo de `get_settings().gemini_model`. Estrutura e tools por agente são cobertas por `tests/test_agent_structure.py`; `tests/test_agent_runtime_scripted.py` executa o Runner real do ADK com um modelo roteirizado (sem rede). Testes com Gemini real ficam em `tests/integration/` (`-m integration`) e só provam algo quando executados com chave.
+- **Ainda planejados:** rotas, `AdkRuntime`, Tool Confirmation, controle persistido de confirmações, agente e tool de regulamento. Os respectivos arquivos são estruturas iniciais. `app/tools/reservas.py` e `visitantes.py` também são placeholders antigos; as implementações estão nos módulos em inglês.
 - **Limite de confirmação:** `requires_confirmation` é apenas um resultado estruturado. Não cria pendência persistida, identificador de confirmação ou retomada ADK.
 - Resultados e limites da validação: [garantias.md](garantias.md#estado-atual-e-evidências).
 
@@ -131,7 +132,14 @@ flowchart TD
 
 ## 4. Agentes
 
-Serão **quatro agentes**: um principal e três especialistas.
+Serão **quatro agentes**: um principal e três especialistas. **Implementados no Passo 6:** Concierge, Reservas e Visitantes. **Regulamento: planejado** (não conectado ao Concierge).
+
+```text
+Concierge Agent (root, sem tools de negócio)
+├── Reservation Agent  (listar_minhas_reservas, verificar_disponibilidade,
+│                       solicitar_reserva, cancelar_minha_reserva)
+└── Visitor Agent      (listar_meus_visitantes, solicitar_autorizacao_visitante)
+```
 
 | Agente | Papel | Acessa dados? |
 |---|---|---|

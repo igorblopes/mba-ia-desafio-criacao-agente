@@ -80,6 +80,12 @@ Adotar um **agente principal (Concierge)** com especialistas registrados como **
 - Surge uma dependência importante: a **retomada de uma confirmação** no ADK pode depender de qual agente a solicitou e da topologia dos agentes (ver [RT-001](riscos-tecnicos.md#rt-001--tool-confirmation--sessão-persistente) e [RT-002](riscos-tecnicos.md#rt-002--retomada-da-confirmação-no-agente-errado)).
 - A topologia escolhida precisa ser validada **cedo**, com sessão persistida.
 
+### Implementação (Passo 6)
+- `concierge_agent` é o root com `sub_agents=[reservation_agent, visitor_agent]`, sem tools de negócio; cada especialista recebe somente as tools do seu domínio (menor privilégio). O Concierge atua só como orquestrador.
+- O modelo vem de `get_settings().gemini_model` (configuração central); não há nome de modelo nos agentes, e todos usam o mesmo modelo por ora.
+- Regulamento: sem agente funcional e fora do prompt do Concierge.
+- Evidência: `tests/test_agent_structure.py` e `tests/test_agent_runtime_scripted.py`; a transferência com Gemini real e com Tool Confirmation continua não comprovada.
+
 ### Pontos provisórios
 - A transferência é a escolha inicial, mas sua compatibilidade com Tool Confirmation e sessão persistida ainda precisa ser comprovada no RT-001/RT-002.
 - Se a retomada não voltar ao agente que solicitou a confirmação, a topologia poderá mudar; essa revisão deverá ser registrada na ADR, preservando a decisão inicial e a evidência do teste.
