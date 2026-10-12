@@ -31,3 +31,23 @@ def tools_wired(session_factory):
     configure_services(session_factory)
     yield session_factory
     reset_services()
+
+
+@pytest_asyncio.fixture
+async def adk_runtime(session_factory, tmp_path):
+    """AdkRuntime real (DatabaseSessionService em arquivo + LLM roteirizado, sem rede)."""
+    from app.runtime.adk_runtime import build_adk_runtime
+    from app.services.provider import reset_services
+    from tests.fake_llm import ScriptedLlm
+    from tests.scripted_plan import plan
+
+    runtime = build_adk_runtime(
+        domain_session_factory=session_factory,
+        session_db_url=f"sqlite+aiosqlite:///{(tmp_path / 'adk_sessions.db').as_posix()}",
+        llm=ScriptedLlm(plan=plan),
+    )
+    try:
+        yield runtime
+    finally:
+        await runtime.close()
+        reset_services()

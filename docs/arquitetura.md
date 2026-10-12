@@ -12,8 +12,9 @@
 - **Passo 5 — implementado e validado no escopo das tools:** `app/tools/reservations.py` e `visitors.py` expõem seis `FunctionTool`, registradas em `app/tools/__init__.py`. O helper `context.py` extrai identidade do estado; `app/services/provider.py` fornece os Services. Schemas e testes com contexto simulado comprovam a fronteira; a API ainda não cria sessões de moradores.
 - **Passo 6 — topologia multiagente implementada:** `app/agents/concierge.py` (root), `reservations.py` e `visitors.py`, com o modelo vindo de `get_settings().gemini_model`. Estrutura e tools por agente são cobertas por `tests/test_agent_structure.py`; `tests/test_agent_runtime_scripted.py` executa o Runner real do ADK com um modelo roteirizado (sem rede). Testes com Gemini real ficam em `tests/integration/` (`-m integration`) e só provam algo quando executados com chave.
 - **Passo 7 — Tool Confirmation real implementada (sessão InMemory):** reserva com taxa e autorização de visitante chamam `tool_context.request_confirmation`; `app/runtime/confirmations.py` detecta `adk_request_confirmation` e gera `PendingConfirmation` (`id`, `invocation_id`, `agent_name`, `action`, `details`) e a resposta formal `FunctionResponse`. Detalhes e descobertas em [garantias.md](garantias.md#estado-atual-e-evidências).
-- **Ainda planejados:** rotas, `AdkRuntime`, controle persistido de confirmações, agente e tool de regulamento. Os respectivos arquivos são estruturas iniciais. `app/tools/reservas.py` e `visitantes.py` também são placeholders antigos; as implementações estão nos módulos em inglês.
-- **Limite de confirmação:** a pendência existe só no histórico de eventos da sessão ADK em memória. Não há pendência persistida, `DatabaseSessionService` validado, restart, endpoint ou `409`.
+- **Passo 8 — confirmação persistente, idempotente e retomável:** `app/runtime/adk_runtime.py` (`AdkRuntime`) usa `DatabaseSessionService` + `ResumabilityConfig(is_resumable=True)`; o estado público da confirmação vive em `confirmacoes` (`condominio.db`) via `ConfirmationRepository`/`ConfirmationService` (`PENDING → PROCESSING → APPROVED | REJECTED`, claim atômico). Restart real validado em processos separados (LLM roteirizado).
+- **Ainda planejados:** rotas HTTP (e o `409`), agente e tool de regulamento. Os respectivos arquivos são estruturas iniciais. `app/tools/reservas.py` e `visitantes.py` também são placeholders antigos; as implementações estão nos módulos em inglês.
+- **Limite de confirmação:** não há endpoint nem `409` HTTP; Gemini real não foi exercitado com restart. A pendência é persistida (tabela + eventos ADK) e sobrevive a restart no nível do `AdkRuntime`.
 - Resultados e limites da validação: [garantias.md](garantias.md#estado-atual-e-evidências).
 
 Documentos relacionados:
@@ -426,7 +427,7 @@ Ao final existe **somente uma** reserva.
 
 ### 8.5 Confirmações — controle próprio
 
-Além do mecanismo de Tool Confirmation do ADK, haverá controle explícito no backend. Modelo conceitual:
+Além do mecanismo de Tool Confirmation do ADK, há controle explícito no backend (**implementado no Passo 8**; colunas reais: `id` = `function_call_id`, `session_id`, `invocation_id`, `agent_name`, `acao`, `detalhes_json`, `status`, `created_at`, `responded_at`). Modelo conceitual:
 
 ```text
 confirmacoes
@@ -442,7 +443,7 @@ created_at
 responded_at
 ```
 
-Estados: `PENDING`, `APPROVED`, `REJECTED`.
+Estados: `PENDING`, `PROCESSING`, `APPROVED`, `REJECTED` (`PROCESSING` = resposta válida já reclamada atomicamente, retomada em andamento). `APPROVED` significa "o usuário aprovou e a tentativa foi executada", **não** "a reserva foi criada" (o resultado de negócio está no retorno da Tool).
 
 Regras:
 
@@ -491,13 +492,11 @@ A integração FastAPI ↔ ADK fica isolada em uma camada, conforme proposta:
 app/runtime/adk_runtime.py
 ```
 
-Operações conceituais:
+Operações (**implementadas no Passo 8**): `create_session(apartment)`, `get_session()`, `send_message()`, `get_events()`, `list_pending_confirmations()` e `resume_confirmation(session_id, confirmation_id, confirmed)`.
 
 ```text
-create_session()
-send_message()
-resume_confirmation()
-get_events()
+FastAPI futura -> AdkRuntime -> Runner/App(resumability) -> DatabaseSessionService -> adk_sessions.db
+                      \-> ConfirmationService -> ConfirmationRepository -> condominio.db (confirmacoes)
 ```
 
 O restante da aplicação **não** deve depender dos detalhes internos da retomada de execução do ADK. Isso é necessário porque a retomada após uma confirmação pode depender do agente que a solicitou, da topologia dos agentes, do Runner, da configuração do App e do serviço de sessão persistente. Esse é o **risco técnico prioritário** do projeto: **Tool Confirmation + sessão persistida em SQLite** ([RT-001](riscos-tecnicos.md#rt-001--tool-confirmation--sessão-persistente)). Deve ser testado **cedo**.
@@ -590,7 +589,7 @@ Notas:
 - `dados/` (com **d**, em português) contém o estado inicial **somente leitura** do condomínio e o regulamento. `data/` (em inglês) contém os bancos SQLite **gerados**. Os nomes são muito parecidos; vale manter essa distinção explícita na documentação e evitar confusão no código.
 - Os arquivos `*.db` são artefatos de execução e **não** devem ser versionados.
 - As rotas de mensagens e eventos não têm arquivo próprio nesta proposta; a alocação (por exemplo, dentro de `api/sessoes.py`) fica para a implementação.
-- `scripts/reset.py` restaura o domínio a partir de `dados/` e preserva sessões por padrão. A opção explícita `--sessions` também apaga o banco de sessões (ADR-006).
+- `scripts/reset.py` restaura o domínio a partir de `dados/` e, desde o Passo 8, **também apaga `adk_sessions.db` por padrão** (ADR-014); `--keep-sessions` preserva. RESET apaga estado de execução; RESTART não apaga nada.
 
 ---
 

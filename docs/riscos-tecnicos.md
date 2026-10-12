@@ -28,12 +28,14 @@ Documentos relacionados: [`garantias.md`](garantias.md) · [`decisoes-arquitetur
 ## RT-001 — Tool Confirmation + sessão persistente
 
 ### Status
-Aberto — **risco técnico prioritário** do projeto. Dividido a partir do Passo 7:
+**Mitigado / validado na versão atual (Google ADK 2.9.1) com LLM roteirizado — Passo 8.** Ainda **não** exercitado com Gemini real nem via API HTTP. Histórico (Passo 7), dividido em:
 
 | Parte | Situação |
 |---|---|
 | Tool Confirmation em sessão compatível (`InMemorySessionService`, Runner real, ADK 2.9.1) | **Validado** com LLM roteirizado (`tests/test_tool_confirmation_scripted.py`): pausa, `FunctionResponse` formal, retomada, aprovação grava uma vez, rejeição não grava. Com Gemini real: testes escritos em `tests/integration/test_tool_confirmation.py`, **não executados** onde não havia chave. |
-| Tool Confirmation + `DatabaseSessionService` + SQLite + restart | **Ainda aberto** — não testado no Passo 7 (Passo 8). |
+| Tool Confirmation + `DatabaseSessionService` + SQLite + restart | **Validado no Passo 8 (ADK 2.9.1, `ResumabilityConfig(is_resumable=True)`)**: pendência criada no processo A, runtime reconstruído por completo em processo separado, aprovação/rejeição retomam a invocation correta e a Tool original executa (ou é rejeitada) uma única vez; reenvio falha com `ConfirmationNotPendingError`. Testes: `tests/test_confirmation_restart.py` (subprocessos), `tests/test_persistent_confirmation.py`, `tests/test_concurrent_confirmations.py`. Arquivos: `app/runtime/adk_runtime.py`, `app/services/confirmation_service.py`, `app/repositories/confirmation_repository.py`. Só o **modelo** é falso nesses testes. |
+
+**Riscos residuais do RT-001:** (1) Gemini real: `tests/integration/test_persistent_confirmation_gemini.py` existe e é pulado sem `GOOGLE_API_KEY`/`GEMINI_MODEL`; (2) a resumability do ADK é *at-least-once* e `ResumabilityConfig` é experimental — qualquer atualização do ADK exige reexecutar os testes acima; (3) queda do processo **durante** a retomada deixa a confirmação em `PROCESSING` (seguro contra duplicação, porém sem reconciliação automática: requer verificação manual do efeito no domínio); (4) não há transação única entre `adk_sessions.db` e `condominio.db` — a reconciliação cobre apenas o caso "ADK gravou, tabela não".
 
 **Evidência parcial (Passo 2):** `DatabaseSessionService` + SQLite persistiu sessão, `state` e evento mínimo entre processos distintos. **Isto NÃO resolve o RT-001:** Tool Confirmation com sessão persistida e a retomada após aprovação continuam **não validadas** (exigem agente/Runner, previstos para etapa posterior).
 
@@ -85,7 +87,7 @@ Variante de reinício: a confirmação é criada, a API é reiniciada e a aprova
 ## RT-002 — Retomada da confirmação no agente errado
 
 ### Status
-Em validação — **Passo 7:** com sessão InMemory e Concierge como root, a resposta formal retomou a Tool no agente que a pediu (`reservation_agent` para reserva, `visitor_agent` para visitante; conferido em eventos e efeito no banco). Topologia mantida. Ainda não validado com sessão persistida, restart nem duas confirmações simultâneas.
+**Validado na versão atual com LLM roteirizado** — Passo 7 (InMemory) e **Passo 8**: com `DatabaseSessionService`, resumability e restart real, a resposta formal retomou a Tool no agente que a pediu (`reservation_agent` / `visitor_agent`, conferido em `agent_name`, eventos e efeito no banco) e duas confirmações independentes simultâneas (sessões diferentes) foram retomadas sem interferência. Topologia mantida. Pendentes: Gemini real e duas confirmações pendentes na **mesma** sessão.
 
 ### Impacto
 **Alto.** Afeta diretamente a Garantia 1 e a escolha da topologia de agentes.
@@ -272,7 +274,7 @@ Uma confirmação já respondida (aprovada ou negada) não deve poder ser usada 
 
 ## Observações do Passo 6
 
-- RT-001 e RT-002 **continuam abertos**: Tool Confirmation real e retomada não foram implementadas. A transferência Concierge → especialista foi exercitada apenas com Runner real e modelo roteirizado; o comportamento de roteamento com Gemini real é instável por natureza e deve ser observado via `pytest -m integration`.
+- *(Histórico do Passo 6; ver RT-001/RT-002 acima para o estado após o Passo 8.)* RT-001 e RT-002 estavam abertos: Tool Confirmation real e retomada ainda não haviam sido implementadas. A transferência Concierge → especialista foi exercitada apenas com Runner real e modelo roteirizado; o comportamento de roteamento com Gemini real é instável por natureza e deve ser observado via `pytest -m integration`.
 - RT-004: o cenário 101 × 302 foi exercitado de ponta a ponta no ADK com modelo roteirizado; permanece pendente a execução com Gemini real e via API.
 
 ---

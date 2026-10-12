@@ -30,6 +30,7 @@
 | [ADR-011](#adr-011--histórico-de-reservas-canceladas-mantido) | Histórico de reservas canceladas mantido | Aceita |
 | [ADR-012](#adr-012--controle-próprio-de-confirmações-além-do-estado-do-adk) | Controle próprio de confirmações além do estado do ADK | Aceita (integração provisória) |
 | [ADR-013](#adr-013--camada-de-service-erros-de-domínio-e-separação-request--execução-confirmada) | Services e execução confirmada separada | Aceita (contenção tratada; outros erros operacionais propagam) |
+| [ADR-014](#adr-014--reset-apaga-sessões-por-padrão-passo-8) | Reset apaga sessões por padrão | Aceita (revisa parte da ADR-006) |
 
 ---
 
@@ -220,7 +221,7 @@ data/
 - O comando de restauração precisa definir o que acontece com as sessões do ADK.
 
 ### Pontos provisórios
-- ~~Se `scripts/reset.py` também apaga `adk_sessions.db`~~ — **decidido no Passo 2:** por padrão o reset restaura somente `condominio.db` e **preserva** `adk_sessions.db`; a opção explícita `--sessions` apaga também as sessões (uso em desenvolvimento).
+- ~~Se `scripts/reset.py` também apaga `adk_sessions.db`~~ — **decidido no Passo 2, revisto no Passo 8 ([ADR-014](#adr-014--reset-apaga-sessões-por-padrão-passo-8)):** o reset passou a apagar `adk_sessions.db` por padrão; `--keep-sessions` preserva.
 
 ### Evidência (Passo 2)
 - `DatabaseSessionService` sobre `sqlite+aiosqlite` em `adk_sessions.db` persistiu sessão, `state["apartamento"]` e um evento mínimo entre dois processos distintos (`uv run python -m scripts.check_session_persistence`).
@@ -341,14 +342,14 @@ Aceita
 A retomada da execução após uma confirmação pode depender do agente que a pediu, da topologia dos agentes, do Runner, da configuração do App e do serviço de sessão persistente. Esse comportamento é sensível a versão e configuração.
 
 ### Decisão
-Isolar a integração FastAPI ↔ ADK em uma camada (proposta: `app/runtime/adk_runtime.py`) com operações conceituais:
+Isolar a integração FastAPI ↔ ADK em uma camada (`app/runtime/adk_runtime.py`, **implementada no Passo 8**) com operações:
 
 ```text
-create_session()
-send_message()
-resume_confirmation()
-get_events()
+create_session()   get_session()   send_message()
+get_events()       list_pending_confirmations()   resume_confirmation()
 ```
+
+A camada esconde Runner, SessionService, `FunctionResponse`, `invocation_id`, retomada, parsing de eventos e agente originador; erros são de domínio (`ConfirmationNotPendingError`, `ConfirmationResumeError`, `SessionNotFoundError`), nunca HTTP. O `App` é criado com `ResumabilityConfig(is_resumable=True)`; o `user_id` do ADK é uma constante interna (chave de partição), nunca fonte de identidade — o apartamento vive em `state`, gravado na criação da sessão.
 
 O restante da aplicação **não depende** dos detalhes internos da retomada.
 
@@ -402,7 +403,7 @@ Reservas canceladas **permanecem registradas** com `status = CANCELADA` (por exe
 ## ADR-012 — Controle próprio de confirmações além do estado do ADK
 
 ### Status
-Aceita *(integração com o identificador do ADK é provisória)*
+Aceita — **implementada no Passo 8** *(quatro pontos provisórios resolvidos abaixo)*
 
 ### Contexto
 O ADK oferece Tool Confirmation, mas a retomada pode falhar silenciosamente conforme topologia e sessão persistente. Além disso, é preciso garantir `409` para `id` inexistente ou já respondido, e idempotência da aprovação.
@@ -415,7 +416,7 @@ id, session_id, acao, detalhes, status,
 invocation_id, agent_name, created_at, responded_at
 ```
 
-Estados: `PENDING`, `APPROVED`, `REJECTED`. Regras:
+Estados: `PENDING`, `PROCESSING`, `APPROVED`, `REJECTED`. Regras:
 
 - somente `PENDING` **da sessão** pode receber resposta;
 - inexistente / já respondida / de outra sessão → **409**;
@@ -434,10 +435,16 @@ Estados: `PENDING`, `APPROVED`, `REJECTED`. Regras:
 - A mudança de estado precisa ser **atômica** para garantir que apenas uma resposta à confirmação seja aceita.
 - A atomicidade da transição impede duas respostas vencedoras, mas não garante sozinha que uma aprovação seja retomada e produza o efeito de negócio; a recuperação entre bancos e etapas precisa de desenho próprio.
 
-### Pontos provisórios
-- Relação entre o `id` do backend e o identificador da chamada pendente no ADK (iguais ou mapeados).
-- Ordem exata entre a transição de estado, a retomada do ADK e a gravação do efeito de negócio, e como recuperar de falha entre essas etapas.
-- Como registrar o resultado quando a aprovação é válida, mas a execução é recusada por conflito (por exemplo, data tomada por outro morador).
+### Decisões do Passo 8 (antes provisórias)
+- **ID:** o `id` público é o `function_call_id` da chamada `adk_request_confirmation` (sem UUID adicional; sem mapeamento).
+- **Ordem e recuperação:** `PENDING → PROCESSING` (claim atômico por `UPDATE … WHERE id AND session_id AND status='PENDING'`, `rowcount == 1`) → `FunctionResponse` ao ADK → Tool original executa → `APPROVED`/`REJECTED`. Falha técnica: volta a `PENDING` **somente** se a quantidade de eventos persistidos no ADK não mudou desde o claim (a Tool certamente não executou); caso contrário permanece `PROCESSING` (prioriza não duplicar). `PROCESSING` deixado por queda do processo não é reconciliado automaticamente — risco residual documentado em RT-001.
+- **Aprovada porém recusada pelo negócio:** a confirmação fica `APPROVED` (o usuário aprovou e a tentativa foi executada); o resultado de negócio (`created`/`unavailable`) está em `ResumeResult.tool_result`. `APPROVED` ≠ reserva criada.
+- **Dois bancos:** persistência separada — ADK em `adk_sessions.db` (sessão, eventos, invocation), aplicação em `condominio.db` (`confirmacoes`). Sem transação única; `list_pending_confirmations` reconcilia o caso "ADK gravou, tabela não".
+- **Validação de invocation:** a retomada confere que o `invocation_id` registrado é o do evento da chamada na sessão, e o Runner resolve a invocation a partir do mesmo evento.
+
+### Pontos ainda provisórios
+- Reconciliação automática de `PROCESSING` órfão.
+- Duas confirmações pendentes na mesma sessão (não testado).
 
 ### Alternativas consideradas
 - **Depender apenas do estado de confirmação do ADK:** rejeitada — não cobre `409`, idempotência nem o risco de retomada silenciosa.
@@ -469,6 +476,19 @@ Na auditoria de 11/10/2026, uma transação concorrente `BEGIN IMMEDIATE` mantid
 
 ---
 
+## ADR-014 — Reset apaga sessões por padrão (Passo 8)
+
+### Status
+Aceita — revisa a decisão do Passo 2 (ADR-006: reset preserva `adk_sessions.db`).
+
+### Contexto
+Confirmações passaram a viver em `condominio.db`, enquanto a pendência equivalente vive nos eventos de `adk_sessions.db`. Zerar apenas o domínio deixaria sessões com `adk_request_confirmation` sem linha na tabela (e ID desconhecido é rejeitado); zerar apenas as sessões deixaria linhas órfãs.
+
+### Decisão
+`scripts/reset.py` restaura **ambos** por padrão (`condominio.db` a partir de `dados/`, incluindo `confirmacoes` vazia, e remove `adk_sessions.db`, recriado no próximo uso). `--keep-sessions` preserva as sessões; `--sessions` é aceito como no-op por compatibilidade. **RESTART** de processo nunca apaga nada. `dados/` segue somente leitura.
+
+---
+
 ## Decisões ainda abertas (resumo)
 
 | Tema | Onde |
@@ -476,5 +496,5 @@ Na auditoria de 11/10/2026, uma transação concorrente `BEGIN IMMEDIATE` mantid
 | Validação da escolha inicial `sub_agents` + transferência e eventual revisão | ADR-002 |
 | Validação do tratamento de contenção na futura integração HTTP | ADR-008 / ADR-013 |
 | Granularidade e método de seleção de trechos do regulamento | ADR-009 |
-| Relação entre `id` de confirmação do backend e identificador do ADK | ADR-012 |
-| Ordem e recuperação de falhas entre confirmação, retomada e gravação | ADR-012 |
+| ~~Relação entre `id` de confirmação do backend e identificador do ADK~~ — decidido no Passo 8 (`id` = `function_call_id`) | ADR-012 |
+| Recuperação automática de `PROCESSING` órfão e duas confirmações pendentes na mesma sessão | ADR-012 |

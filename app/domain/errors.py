@@ -50,3 +50,35 @@ class ReservationCodeGenerationError(DomainError):
 class InvalidVisitorNameError(DomainError):
     def __init__(self) -> None:
         super().__init__("O nome do visitante não pode ser vazio.")
+
+
+class SessionNotFoundError(DomainError):
+    def __init__(self) -> None:
+        super().__init__("Sessão não encontrada.")
+
+
+class ConfirmationError(DomainError):
+    """Base dos erros do ciclo de vida de confirmações."""
+
+
+class ConfirmationNotPendingError(ConfirmationError):
+    """Inexistente, de outra sessão ou já respondida: indistinguíveis de propósito."""
+
+    def __init__(self) -> None:
+        super().__init__("Confirmação não encontrada ou não está pendente.")
+
+
+class ConfirmationResumeError(ConfirmationError):
+    """Falha técnica ao retomar a invocation após o claim.
+
+    ``released`` indica se a confirmação voltou a PENDING (nada foi executado e uma nova
+    tentativa é segura). Se False, ela permanece PROCESSING para evitar execução duplicada.
+    """
+
+    def __init__(self, *, released: bool) -> None:
+        self.released = released
+        super().__init__(
+            "Falha ao retomar a confirmação; tente novamente."
+            if released
+            else "Falha ao retomar a confirmação; o resultado precisa ser verificado."
+        )

@@ -1,10 +1,13 @@
 """Restaura ``condominio.db`` ao estado inicial a partir de ``dados/``.
 
-    uv run python -m scripts.reset             # só o banco de domínio
-    uv run python -m scripts.reset --sessions  # também apaga adk_sessions.db
+    uv run python -m scripts.reset                  # condominio.db + confirmações + adk_sessions.db
+    uv run python -m scripts.reset --keep-sessions  # só condominio.db (cuidado: confirmações PENDING somem)
 
-Fluxo permitido: dados/ -> leitura -> condominio.db. ``dados/`` nunca é escrito.
-Idempotente: o esquema é recriado do zero e os dados reimportados a cada execução.
+RESET apaga estado de execução e volta ao ambiente inicial. RESTART (reiniciar o processo) não
+apaga nada. Fluxo permitido: dados/ -> leitura -> condominio.db. ``dados/`` nunca é escrito.
+Idempotente: o esquema é recriado do zero (inclui ``confirmacoes``) e os dados reimportados.
+Sessões ADK são apagadas por padrão porque confirmações vivem em ``condominio.db``: manter
+sessões com pedidos pendentes e zerar a tabela deixaria o ADK e a aplicação inconsistentes.
 """
 
 from __future__ import annotations
@@ -99,9 +102,14 @@ def delete_sessions_db() -> list[Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
+        "--keep-sessions",
+        action="store_true",
+        help="preserva adk_sessions.db (padrão: apagar, para um ambiente totalmente inicial)",
+    )
+    parser.add_argument(
         "--sessions",
         action="store_true",
-        help="apaga também adk_sessions.db (apenas desenvolvimento)",
+        help="obsoleto: apagar sessões já é o padrão (aceito por compatibilidade)",
     )
     args = parser.parse_args()
 
@@ -114,11 +122,11 @@ def main() -> None:
     for tabela, n in counts.items():
         print(f"  {tabela}: {n}")
 
-    if args.sessions:
-        removed = delete_sessions_db()
-        print(f"adk_sessions.db removido ({len(removed)} arquivo(s))")
-    else:
+    if args.keep_sessions:
         print("adk_sessions.db preservado")
+    else:
+        removed = delete_sessions_db()
+        print(f"adk_sessions.db removido ({len(removed)} arquivo(s)); recriado no próximo uso")
 
 
 if __name__ == "__main__":

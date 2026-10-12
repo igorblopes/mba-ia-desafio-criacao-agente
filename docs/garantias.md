@@ -1,7 +1,7 @@
 # Garantias arquiteturais — Residencial Aurora
 
-> **Status do documento (11/10/2026):** requisitos da arquitetura alvo e evidências dos Passos 2 a 5, incluindo regressões de integridade e contenção. As estratégias descrevem o comportamento exigido do sistema completo; não constituem declaração de implementação ponta a ponta.
-> Persistência, Services, seis FunctionTools e a topologia multiagente existem. **Tool Confirmation do ADK (Passo 7) está implementada e testada em sessão `InMemorySessionService`**; API, controle persistido de confirmações, persistência após restart e consulta do regulamento permanecem planejados. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
+> **Status do documento (12/10/2026):** requisitos da arquitetura alvo e evidências dos Passos 2 a 8, incluindo regressões de integridade e contenção. As estratégias descrevem o comportamento exigido do sistema completo; não constituem declaração de implementação ponta a ponta.
+> Persistência, Services, seis FunctionTools e a topologia multiagente existem. **Tool Confirmation do ADK (Passo 7) e confirmação persistente, idempotente e retomável após restart (Passo 8) estão implementadas e testadas com LLM roteirizado (sem Gemini real)**; a API HTTP (`409`) e a consulta do regulamento permanecem planejadas. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
 
 ## Estado atual e evidências
 
@@ -12,13 +12,14 @@
 | Passo 4 | 15 testes de concorrência | Exclusividade comprovada no domínio, ainda sem HTTP/confirmadores concorrentes |
 | Passo 5 | 31 testes de tools e schemas | Contexto simulado; duas chamadas também passam por `FunctionTool.run_async`; sem Agent/Runner |
 | Passo 7 | Tool Confirmation real (`request_confirmation`), parser de eventos, resposta formal, Runner real com LLM roteirizado | Sessão InMemory; Gemini real só com chave; sem `DatabaseSessionService`, restart, tabela de confirmações, API ou 409 |
+| Passo 8 | `AdkRuntime` (`create_session`, `send_message`, `get_events`, `resume_confirmation`), `DatabaseSessionService` + resumability, tabela `confirmacoes` (`PENDING/PROCESSING/APPROVED/REJECTED`), claim atômico; restart real em **processos Python separados** (`tests/test_confirmation_restart.py`) | LLM roteirizado; Gemini real só com chave (testes `integration` pulados sem ela); sem API HTTP; `PROCESSING` órfão após queda em plena retomada não é reconciliado automaticamente |
 | Correções | 18 regressões de integridade e contenção | Locks reais nas escritas; códigos estendidos e tradução nas seis tools também exercitados por injeção de erro |
 
-A suíte offline atual soma **148 testes aprovados** (`uv run pytest`, após o Passo 7), com bancos temporários e sem Gemini; os 19 testes `integration` ficaram `skipped` no ambiente de execução desse passo, sem `GOOGLE_API_KEY`. A auditoria atual não executa `uv sync` nem restaura bancos locais.
+A suíte offline atual soma **183 testes aprovados** (`uv run pytest`, após o Passo 8; eram 148 após o Passo 7), com bancos temporários e sem Gemini; os 20 testes `integration` ficaram `skipped` no ambiente de execução desse passo, sem `GOOGLE_API_KEY`. A execução do Passo 8 ocorreu em Linux/Python 3.12 (container); reexecute `uv run pytest` no Windows para confirmar no ambiente local. A auditoria atual não executa `uv sync` nem restaura bancos locais.
 Os 31 testes e comandos citados na seção histórica dos Passos 2 e 3 não são o
 inventário da suíte atual.
 
-Desde o Passo 7 as Tools de reserva paga e visitante pedem Tool Confirmation real do ADK (status intermediário `pending_confirmation`), mas ainda não existem tabela de confirmações, endpoint, `409` nem retomada após restart. As cinco garantias do produto completo **não estão
+Desde o Passo 7 as Tools de reserva paga e visitante pedem Tool Confirmation real do ADK (status intermediário `pending_confirmation`); desde o Passo 8 a pendência é persistida, respondida uma única vez e retomável após restart no nível do `AdkRuntime`. Ainda não existem endpoint nem `409` HTTP (tradução de `ConfirmationNotPendingError`). As cinco garantias do produto completo **não estão
 integralmente validadas**. As seções de estratégia abaixo descrevem a arquitetura
 alvo; apenas os componentes marcados como implementados representam o código atual.
 
@@ -93,12 +94,25 @@ Ações que não geram cobrança nem liberam acesso (reserva de área sem taxa, 
 - Testes: `tests/test_confirmation_events.py` (parser offline), `tests/test_tool_confirmation_scripted.py` (Runner real + LLM roteirizado) e `tests/integration/test_tool_confirmation.py` (Gemini real; `skip` sem `GOOGLE_API_KEY`).
 - **Limitação registrada:** o `payload` do `request_confirmation` não volta na resposta do cliente (`tool_confirmation.payload` é `None` na retomada). A taxa usada na retomada é lida novamente do banco; a conferência entre taxa mostrada e taxa aprovada precisará usar o registro persistido do Passo 8.
 - **Descobertas (não são a garantia final):** (a) enviar a mesma resposta duas vezes **re-executa a Tool**: a reserva é contida só pelo índice único do banco (`unavailable`), mas a autorização de visitante **foi duplicada** (2 registros); (b) `id` inexistente levanta `ValueError: Function call not found for function response ids` dentro do ADK. A regra "reenvio ou id inexistente → 409" continua pendente para o Passo 8/API.
-- **NÃO validado neste passo:** `DatabaseSessionService` + SQLite, reinício do processo, persistência de confirmações (`PENDING`/`APPROVED`/`REJECTED`), rota `/confirmacoes` e HTTP 409.
+- **NÃO validado neste passo:** `DatabaseSessionService` + SQLite, reinício do processo, persistência de confirmações (`PENDING`/`APPROVED`/`REJECTED`), rota `/confirmacoes` e HTTP 409. *(Os três primeiros foram tratados no Passo 8, abaixo; a rota e o 409 seguem pendentes.)*
+
+**Evidências do Passo 8 (ADK 2.9.1, `DatabaseSessionService` em `adk_sessions.db`, resumability ligada):**
+
+- **Estado da confirmação** (`app/database/models.py::Confirmacao`, tabela `confirmacoes` em `condominio.db`): `id` (= `function_call_id` da chamada `adk_request_confirmation`, sem UUID extra), `session_id`, `invocation_id`, `agent_name`, `acao`, `detalhes_json`, `status`, `created_at`, `responded_at`. **Não guarda apartamento**; `CHECK` limita o status.
+- **Estados:** `PENDING → PROCESSING → APPROVED | REJECTED` (enum `ConfirmationStatus`). `PROCESSING → PENDING` só quando é certo que a Tool não executou (a contagem de eventos persistidos no ADK não mudou desde o claim); qualquer falha depois de o ADK gravar eventos mantém `PROCESSING`, priorizando não duplicar o efeito. `APPROVED`/`REJECTED` descrevem a **resposta do usuário**, não o resultado de negócio: uma confirmação `APPROVED` pode ter retornado `{"status": "unavailable"}` (perdeu a corrida pela mesma área/data).
+- **Claim atômico:** `UPDATE confirmacoes SET status='PROCESSING' WHERE id=? AND session_id=? AND status='PENDING'` com `rowcount == 1` (`ConfirmationRepository.claim`). Doze `claim_pending` simultâneos → 1 vencedor e 11 `ConfirmationNotPendingError` (`tests/test_confirmation_service.py`); 6 `resume_confirmation` simultâneos do mesmo ID → 1 execução (`tests/test_concurrent_confirmations.py`).
+- **Respostas neutras:** ID inexistente, ID de outra sessão e ID já respondido levantam o mesmo `ConfirmationNotPendingError`, sem citar a sessão dona, e não tocam o ADK nem o domínio. Isso corrige a descoberta do Passo 7: o ADK sozinho **re-executa** a Tool quando o mesmo ID é respondido de novo (duplicou o visitante); com `AdkRuntime` a segunda resposta é barrada antes do Runner.
+- **Negação também retoma o ADK:** `confirmed=false` envia `FunctionResponse(false)`, a Tool original responde `{"status": "rejected"}` e só então a linha vira `REJECTED`.
+- **Retomada:** `resume_confirmation` faz claim → confere que o `invocation_id` registrado é o do evento que originou a chamada → `FunctionResponse(id=function_call_id)` → Runner retoma a invocation (resolvida pelo ADK a partir do evento da chamada) → exige a resposta da Tool original → `APPROVED`/`REJECTED`.
+- **Identidade após restart:** `state["apartamento"]` foi gravado na criação da sessão (`create_session`) e as Tools o leem do `ToolContext`; o teste de restart registra o valor realmente lido pelas Tools na retomada (`["101"]`), e a reserva criada pertence a esse apartamento. `detalhes_json` não contém apartamento.
+- **Restart real:** `tests/test_confirmation_restart.py` executa cada fase em um **processo Python separado** (`tests/restart_worker.py`: `create` → `inspect` → `resume` → `resume` repetido), reconstruindo engine, `DatabaseSessionService`, `App`, `Runner` e `AdkRuntime`. Resultado: pendência e eventos sobrevivem, aprovar após restart cria exatamente 1 reserva, repetir a aprovação falha e deixa 1 reserva e os mesmos eventos; rejeição e visitante também validados após restart.
+- **Concorrência de duas confirmações independentes** (S3=101, S4=201, salão, 2030-05-11): ambas processadas, resultados `created` + `unavailable`, ambas `APPROVED`, exatamente 1 reserva ATIVA, sessões íntegras.
+- **Reconciliação:** se o processo cair entre o commit do ADK e o da tabela, `list_pending_confirmations` reinsere como `PENDING` as chamadas ainda sem resposta no histórico da sessão. ID desconhecido continua sendo rejeitado.
+- **Não validado:** Gemini real com restart (teste `tests/integration/test_persistent_confirmation_gemini.py` pulado sem chave); duas confirmações pendentes **na mesma sessão**; reconciliação automática de `PROCESSING` deixado por queda do processo no meio da retomada; API HTTP/`409`.
 
 - **Implementado:** `app/tools/reservations.py` e `app/tools/visitors.py` — `request_confirmation` sem efeito de negócio antes da resposta formal; `app/runtime/confirmations.py` — `PendingConfirmation`, detecção de `adk_request_confirmation` e `build_confirmation_response`. Os módulos antigos `reservas.py` e `visitantes.py` são placeholders;
-- `app/api/confirmacoes.py` — endpoint, validação de `PENDING` na sessão, resposta `409`;
-- `app/runtime/adk_runtime.py` — `resume_confirmation()` (retomada da execução no ADK);
-- `app/database/schema.py` e `app/repositories/` — tabela `confirmacoes` e transição atômica de estado;
+- **Implementado (Passo 8):** `app/runtime/adk_runtime.py` — `AdkRuntime.resume_confirmation()` e demais operações; `app/database/models.py` (`Confirmacao`), `app/repositories/confirmation_repository.py` e `app/services/confirmation_service.py` — tabela `confirmacoes` e transição atômica de estado;
+- **Planejado:** `app/api/confirmacoes.py` — endpoint, tradução de `ConfirmationNotPendingError` em `409`;
 - `app/services/reservation_service.py` e `app/services/visitor_service.py` — regras de confirmação **implementadas no domínio**, sem aprovação externa integrada.
 
 ### Por que não depende do LLM
@@ -119,7 +133,7 @@ Ações que não geram cobrança nem liberam acesso (reserva de área sem taxa, 
 - Responder `id` inexistente / de outra sessão → **409** e nada muda.
 - Reservar área sem taxa → **sem** confirmação pendente.
 - Autorizar visitante dizendo "já estou confirmando aqui" → continua pendente; só grava após aprovação pelo endpoint.
-- Repetir os testes com **sessão persistida em SQLite** e **depois de reiniciar a API** (não apenas em memória).
+- Repetir os testes com **sessão persistida em SQLite** e **depois de reiniciar a API** (não apenas em memória). *(Feito no nível do `AdkRuntime` no Passo 8; a repetição via HTTP e o `409` seguem pendentes.)*
 
 ---
 
@@ -191,7 +205,7 @@ Reiniciar a API não pode apagar conversas nem dados. Depois do reinício, a **m
 
 ### Estratégia arquitetural
 
-1. **Dados de negócio** em `condominio.db` (SQLite) — apartamentos, áreas, reservas e visitantes implementados; confirmações ainda planejadas.
+1. **Dados de negócio** em `condominio.db` (SQLite) — apartamentos, áreas, reservas, visitantes e confirmações (Passo 8) implementados.
 2. **Sessões e eventos** em `adk_sessions.db`, via `DatabaseSessionService` do ADK ou equivalente.
 3. A carga inicial de `dados/` existe em `scripts/reset.py`, por restauração explícita. A futura subida da API não deverá restaurar os dados automaticamente.
 4. Reservas canceladas são mantidas como histórico (`status = CANCELADA`), o que permite que **nenhum código de reserva seja reutilizado**; a unicidade do código é reforçada por constraint.
@@ -201,9 +215,10 @@ Reiniciar a API não pode apagar conversas nem dados. Depois do reinício, a **m
 > O estado atual é explicitado nos itens implementados; os demais itens descrevem a integração planejada.
 
 - **Implementado:** `app/database/connection.py`, `models.py` e `schema.py` — conexão, modelos e esquema do domínio.
-- **Implementado:** `app/runtime/session_service.py` — fábrica do serviço de sessão persistente do ADK; `adk_runtime.py` continua planejado.
+- **Implementado:** `app/runtime/session_service.py` — fábrica do `DatabaseSessionService`; `app/runtime/adk_runtime.py` (Passo 8) usa esse serviço no runtime real, com resumability (`ResumabilityConfig(is_resumable=True)`) no `App`.
+- **Validado (Passo 8):** sessão, `state["apartamento"]`, eventos e confirmação `PENDING` sobrevivem a uma reconstrução completa do runtime em outro processo (`tests/test_confirmation_restart.py`); após a retomada a quantidade de eventos aumenta. Não validado com Gemini real nem via API.
 - **Implementado:** `app/config.py` — caminhos dos bancos; `app/main.py` ainda não inicializa uma API funcional.
-- **Implementado:** `scripts/reset.py` — restauração explícita; preserva sessões por padrão e permite removê-las com `--sessions`.
+- **Implementado:** `scripts/reset.py` — **RESET** restaura `condominio.db` (inclui `confirmacoes` vazia) e, por padrão desde o Passo 8, apaga `adk_sessions.db`; `--keep-sessions` preserva. **RESTART** do processo não apaga nada (sessões, confirmações, reservas e visitantes permanecem; coberto por `test_restart_does_not_clear_but_reset_does`).
 
 ### Por que não depende do LLM
 
