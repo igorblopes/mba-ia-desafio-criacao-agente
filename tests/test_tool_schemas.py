@@ -67,6 +67,15 @@ def test_confirmed_operations_are_not_public():
     assert not any("confirmed" in n or "confirm" in n for n in names)
 
 
-def test_confirmation_not_enabled():
+def test_confirmation_is_dynamic_not_static():
+    """A confirmação é dinâmica (request_confirmation); não há require_confirmation estático."""
     for tool in PUBLIC_TOOLS:
         assert tool._require_confirmation is False
+
+
+@pytest.mark.parametrize("tool", PUBLIC_TOOLS, ids=lambda t: t.name)
+def test_no_confirmation_parameters_visible_to_model(tool):
+    visible = {p.lower() for p in _visible_params(tool)}
+    for word in ("confirmed", "confirmation", "approval", "approved", "confirmation_id",
+                 "invocation_id", "agent_name"):
+        assert word not in visible

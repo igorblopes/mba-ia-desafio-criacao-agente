@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.database.models import Visitante
 from app.tools.context import MissingSessionApartmentError, get_session_apartment
 from app.tools.visitors import listar_meus_visitantes, solicitar_autorizacao_visitante
-from tests.tool_helpers import ctx
+from tests.tool_helpers import confirmation, ctx
 
 
 async def _names(factory) -> list[str]:
@@ -24,12 +24,26 @@ async def test_list_isolated(tools_wired):
     assert [v["nome"] for v in r302["visitantes"]] == ["Marina Duarte"]
 
 
-async def test_request_requires_confirmation_without_writing(tools_wired):
-    res = await solicitar_autorizacao_visitante("Joana Ribeiro", "2030-04-21", ctx("101"))
-    assert res == {
-        "status": "requires_confirmation",
-        "nome": "Joana Ribeiro",
-        "data": "2030-04-21",
+async def test_request_asks_confirmation_without_writing(tools_wired):
+    c = ctx("101")
+    res = await solicitar_autorizacao_visitante("Joana Ribeiro", "2030-04-21", c)
+    details = {"acao": "autorizar_visitante", "nome": "Joana Ribeiro", "data": "2030-04-21"}
+    assert res == {"status": "pending_confirmation", **details}
+    assert len(c.requests) == 1 and c.requests[0]["payload"] == details
+    assert "Joana Ribeiro" not in await _names(tools_wired)
+
+
+async def test_approved_authorizes_visitor(tools_wired):
+    c = ctx("101", confirmation=confirmation(True))
+    res = await solicitar_autorizacao_visitante("Joana Ribeiro", "2030-04-21", c)
+    assert res == {"status": "authorized", "nome": "Joana Ribeiro", "data": "2030-04-21"}
+    assert (await _names(tools_wired)).count("Joana Ribeiro") == 1
+
+
+async def test_rejected_does_not_write(tools_wired):
+    c = ctx("101", confirmation=confirmation(False))
+    assert await solicitar_autorizacao_visitante("Joana Ribeiro", "2030-04-21", c) == {
+        "status": "rejected"
     }
     assert "Joana Ribeiro" not in await _names(tools_wired)
 

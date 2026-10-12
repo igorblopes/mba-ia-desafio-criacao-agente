@@ -1,7 +1,7 @@
 # Garantias arquiteturais — Residencial Aurora
 
 > **Status do documento (11/10/2026):** requisitos da arquitetura alvo e evidências dos Passos 2 a 5, incluindo regressões de integridade e contenção. As estratégias descrevem o comportamento exigido do sistema completo; não constituem declaração de implementação ponta a ponta.
-> Persistência, Services e seis FunctionTools existem. API, agentes, Tool Confirmation, controle persistido de confirmações e consulta do regulamento permanecem planejados. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
+> Persistência, Services, seis FunctionTools e a topologia multiagente existem. **Tool Confirmation do ADK (Passo 7) está implementada e testada em sessão `InMemorySessionService`**; API, controle persistido de confirmações, persistência após restart e consulta do regulamento permanecem planejados. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
 
 ## Estado atual e evidências
 
@@ -11,16 +11,14 @@
 | Passo 3 | 31 testes de Services | Operações `create_confirmed_*` exigem chamador confiável; não validam aprovação externa |
 | Passo 4 | 15 testes de concorrência | Exclusividade comprovada no domínio, ainda sem HTTP/confirmadores concorrentes |
 | Passo 5 | 31 testes de tools e schemas | Contexto simulado; duas chamadas também passam por `FunctionTool.run_async`; sem Agent/Runner |
+| Passo 7 | Tool Confirmation real (`request_confirmation`), parser de eventos, resposta formal, Runner real com LLM roteirizado | Sessão InMemory; Gemini real só com chave; sem `DatabaseSessionService`, restart, tabela de confirmações, API ou 409 |
 | Correções | 18 regressões de integridade e contenção | Locks reais nas escritas; códigos estendidos e tradução nas seis tools também exercitados por injeção de erro |
 
-A suíte atual soma **95 testes aprovados**. A execução completa mais recente usa
-`.venv\Scripts\python.exe -B -m pytest -q -p no:cacheprovider`, com bancos temporários,
-sem Gemini. A auditoria atual não executa `uv sync` nem restaura bancos locais.
+A suíte offline atual soma **148 testes aprovados** (`uv run pytest`, após o Passo 7), com bancos temporários e sem Gemini; os 19 testes `integration` ficaram `skipped` no ambiente de execução desse passo, sem `GOOGLE_API_KEY`. A auditoria atual não executa `uv sync` nem restaura bancos locais.
 Os 31 testes e comandos citados na seção histórica dos Passos 2 e 3 não são o
 inventário da suíte atual.
 
-`requires_confirmation` não cria uma confirmação pendente: não existem tabela,
-ID, endpoint ou retomada. As cinco garantias do produto completo **não estão
+Desde o Passo 7 as Tools de reserva paga e visitante pedem Tool Confirmation real do ADK (status intermediário `pending_confirmation`), mas ainda não existem tabela de confirmações, endpoint, `409` nem retomada após restart. As cinco garantias do produto completo **não estão
 integralmente validadas**. As seções de estratégia abaixo descrevem a arquitetura
 alvo; apenas os componentes marcados como implementados representam o código atual.
 
@@ -83,9 +81,21 @@ Ações que não geram cobrança nem liberam acesso (reserva de área sem taxa, 
 
 ### Componentes e estado de implementação
 
-> **Estado atual:** a regra de taxa e a separação request/execução estão nos services. Os demais mecanismos abaixo são planejados; API e runtime são estruturas iniciais e a tabela de confirmações não existe. As tools implementadas retornam `requires_confirmation` sem gravar; Tool Confirmation está desativada.
+> **Estado atual:** a regra de taxa e a separação request/execução estão nos services, e as Tools usam `tool_context.request_confirmation` / `tool_context.tool_confirmation` (Passo 7, validado em sessão InMemory). Os demais mecanismos abaixo são planejados; API é estrutura inicial e a tabela de confirmações não existe.
 
-- **Implementado:** `app/tools/reservations.py` e `app/tools/visitors.py` — retorno `requires_confirmation`, sem efeito de negócio para reserva paga e visitante. **Planejado:** integração com Tool Confirmation; os módulos antigos `reservas.py` e `visitantes.py` são placeholders;
+**Evidências do Passo 7 (ADK 2.9.1, sessão `InMemorySessionService`):**
+
+- `solicitar_reserva` (área com taxa) e `solicitar_autorizacao_visitante` chamam `tool_context.request_confirmation(hint, payload)`; o ADK emite a chamada `adk_request_confirmation` e a execução pausa sem gravar nada.
+- A retomada usa **somente** `tool_context.tool_confirmation`, preenchido pelo ADK a partir de um `FunctionResponse` formal (`name="adk_request_confirmation"`, `id` = id da chamada pendente, `response={"confirmed": bool}`). Nenhuma Tool recebe `confirmed`/`confirmation` como parâmetro (`tests/test_tool_schemas.py`).
+- Aprovar cria exatamente uma reserva / um visitante; rejeitar retorna `{"status": "rejected"}` e não grava. Reserva gratuita e cancelamento próprio não geram confirmação.
+- Textos como "já estou confirmando aqui" não geram `tool_confirmation` e a confirmação formal continua exigida.
+- `id`, `invocation_id` (`event.invocation_id`) e `agent_name` (`event.author`: `reservation_agent` / `visitor_agent`) são extraídos por `app/runtime/confirmations.py`; a retomada ocorreu no agente especialista correto mesmo com o Concierge como root.
+- Testes: `tests/test_confirmation_events.py` (parser offline), `tests/test_tool_confirmation_scripted.py` (Runner real + LLM roteirizado) e `tests/integration/test_tool_confirmation.py` (Gemini real; `skip` sem `GOOGLE_API_KEY`).
+- **Limitação registrada:** o `payload` do `request_confirmation` não volta na resposta do cliente (`tool_confirmation.payload` é `None` na retomada). A taxa usada na retomada é lida novamente do banco; a conferência entre taxa mostrada e taxa aprovada precisará usar o registro persistido do Passo 8.
+- **Descobertas (não são a garantia final):** (a) enviar a mesma resposta duas vezes **re-executa a Tool**: a reserva é contida só pelo índice único do banco (`unavailable`), mas a autorização de visitante **foi duplicada** (2 registros); (b) `id` inexistente levanta `ValueError: Function call not found for function response ids` dentro do ADK. A regra "reenvio ou id inexistente → 409" continua pendente para o Passo 8/API.
+- **NÃO validado neste passo:** `DatabaseSessionService` + SQLite, reinício do processo, persistência de confirmações (`PENDING`/`APPROVED`/`REJECTED`), rota `/confirmacoes` e HTTP 409.
+
+- **Implementado:** `app/tools/reservations.py` e `app/tools/visitors.py` — `request_confirmation` sem efeito de negócio antes da resposta formal; `app/runtime/confirmations.py` — `PendingConfirmation`, detecção de `adk_request_confirmation` e `build_confirmation_response`. Os módulos antigos `reservas.py` e `visitantes.py` são placeholders;
 - `app/api/confirmacoes.py` — endpoint, validação de `PENDING` na sessão, resposta `409`;
 - `app/runtime/adk_runtime.py` — `resume_confirmation()` (retomada da execução no ADK);
 - `app/database/schema.py` e `app/repositories/` — tabela `confirmacoes` e transição atômica de estado;

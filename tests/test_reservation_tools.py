@@ -11,7 +11,7 @@ from app.tools.reservations import (
     solicitar_reserva,
     verificar_disponibilidade,
 )
-from tests.tool_helpers import ctx
+from tests.tool_helpers import confirmation, ctx
 
 
 async def _reservas(factory) -> list[Reserva]:
@@ -70,17 +70,50 @@ async def test_free_area_creates_reservation_for_session_apartment(tools_wired):
     assert row2.apartamento == "201"
 
 
-async def test_paid_area_requires_confirmation_and_does_not_write(tools_wired):
+async def test_paid_area_requests_confirmation_and_does_not_write(tools_wired):
     before = await _reservas(tools_wired)
-    res = await solicitar_reserva("salao-de-festas", "2030-05-01", ctx("101"))
-    assert res == {
-        "status": "requires_confirmation",
+    c = ctx("101")
+    res = await solicitar_reserva("salao-de-festas", "2030-05-01", c)
+    details = {
+        "acao": "reservar_area",
         "area": "salao-de-festas",
         "data": "2030-05-01",
         "taxa_centavos": 15000,
     }
+    assert res == {"status": "pending_confirmation", **details}
+    assert len(c.requests) == 1 and c.requests[0]["payload"] == details
     after = await _reservas(tools_wired)
     assert [r.codigo for r in after] == [r.codigo for r in before]
+
+
+async def test_paid_area_approved_creates_exactly_one(tools_wired):
+    details = {"acao": "reservar_area", "area": "salao-de-festas",
+               "data": "2030-05-01", "taxa_centavos": 15000}
+    c = ctx("101", confirmation=confirmation(True, details))
+    res = await solicitar_reserva("salao-de-festas", "2030-05-01", c)
+    assert res["status"] == "created" and res["area"] == "salao-de-festas"
+    assert c.requests == []
+    rows = [r for r in await _reservas(tools_wired) if r.data.isoformat() == "2030-05-01"]
+    assert len(rows) == 1 and rows[0].apartamento == "101"
+
+
+async def test_paid_area_rejected_writes_nothing(tools_wired):
+    before = await _reservas(tools_wired)
+    c = ctx("101", confirmation=confirmation(False, {"taxa_centavos": 15000}))
+    assert await solicitar_reserva("salao-de-festas", "2030-05-01", c) == {"status": "rejected"}
+    assert len(await _reservas(tools_wired)) == len(before)
+
+
+async def test_free_area_never_requests_confirmation(tools_wired):
+    c = ctx("101")
+    assert (await solicitar_reserva("quadra", "2030-05-02", c))["status"] == "created"
+    assert c.requests == []
+
+
+async def test_cancel_never_requests_confirmation(tools_wired):
+    c = ctx("101")
+    assert (await cancelar_minha_reserva("RSV-1377", c))["status"] == "cancelled"
+    assert c.requests == []
 
 
 async def test_unavailable_does_not_leak(tools_wired):

@@ -1,6 +1,6 @@
 # Arquitetura — Residencial Aurora
 
-> **Status do documento (11/10/2026):** arquitetura alvo e estado implementado até o Passo 5, incluindo as correções de integridade e contenção. Persistência, Services, seis FunctionTools e a topologia Concierge + Reservas + Visitantes existem; HTTP, Tool Confirmation e o agente de regulamento continuam planejados.
+> **Status do documento (11/10/2026):** arquitetura alvo e estado implementado até o Passo 7. Persistência, Services, seis FunctionTools, a topologia Concierge + Reservas + Visitantes e a Tool Confirmation do ADK (sessão InMemory) existem; HTTP, persistência de confirmações/restart e o agente de regulamento continuam planejados.
 > Mudanças de decisão são registradas em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md). Decisão aceita não significa implementação ou validação ponta a ponta.
 
 ## Estado atual dos Passos 2 a 5
@@ -11,8 +11,9 @@
 - **Passo 4 — validado no domínio:** índice único parcial, sessões independentes, rollback, colisão de código, 25 corridas repetidas e classificação da violação SQLite original. Banco ocupado vira `StorageBusyError`; não há retry automático de contenção.
 - **Passo 5 — implementado e validado no escopo das tools:** `app/tools/reservations.py` e `visitors.py` expõem seis `FunctionTool`, registradas em `app/tools/__init__.py`. O helper `context.py` extrai identidade do estado; `app/services/provider.py` fornece os Services. Schemas e testes com contexto simulado comprovam a fronteira; a API ainda não cria sessões de moradores.
 - **Passo 6 — topologia multiagente implementada:** `app/agents/concierge.py` (root), `reservations.py` e `visitors.py`, com o modelo vindo de `get_settings().gemini_model`. Estrutura e tools por agente são cobertas por `tests/test_agent_structure.py`; `tests/test_agent_runtime_scripted.py` executa o Runner real do ADK com um modelo roteirizado (sem rede). Testes com Gemini real ficam em `tests/integration/` (`-m integration`) e só provam algo quando executados com chave.
-- **Ainda planejados:** rotas, `AdkRuntime`, Tool Confirmation, controle persistido de confirmações, agente e tool de regulamento. Os respectivos arquivos são estruturas iniciais. `app/tools/reservas.py` e `visitantes.py` também são placeholders antigos; as implementações estão nos módulos em inglês.
-- **Limite de confirmação:** `requires_confirmation` é apenas um resultado estruturado. Não cria pendência persistida, identificador de confirmação ou retomada ADK.
+- **Passo 7 — Tool Confirmation real implementada (sessão InMemory):** reserva com taxa e autorização de visitante chamam `tool_context.request_confirmation`; `app/runtime/confirmations.py` detecta `adk_request_confirmation` e gera `PendingConfirmation` (`id`, `invocation_id`, `agent_name`, `action`, `details`) e a resposta formal `FunctionResponse`. Detalhes e descobertas em [garantias.md](garantias.md#estado-atual-e-evidências).
+- **Ainda planejados:** rotas, `AdkRuntime`, controle persistido de confirmações, agente e tool de regulamento. Os respectivos arquivos são estruturas iniciais. `app/tools/reservas.py` e `visitantes.py` também são placeholders antigos; as implementações estão nos módulos em inglês.
+- **Limite de confirmação:** a pendência existe só no histórico de eventos da sessão ADK em memória. Não há pendência persistida, `DatabaseSessionService` validado, restart, endpoint ou `409`.
 - Resultados e limites da validação: [garantias.md](garantias.md#estado-atual-e-evidências).
 
 Documentos relacionados:
@@ -295,6 +296,18 @@ sequenceDiagram
 ```
 
 ### 7.2 Ação que exige confirmação (cobrança ou acesso)
+
+Fluxo implementado e testado no Passo 7 (Runner real, sessão InMemory):
+
+```text
+Tool
+↓ tool_context.request_confirmation(hint, payload)
+evento ADK com a chamada adk_request_confirmation (id, invocation_id, author = agente)
+↓ cliente envia FunctionResponse(name="adk_request_confirmation", id, {"confirmed": bool})
+ADK injeta tool_context.tool_confirmation
+↓ retomada
+Tool original re-executa: confirmed → create_confirmed_*; rejeitado → {"status": "rejected"}
+```
 
 ```mermaid
 sequenceDiagram

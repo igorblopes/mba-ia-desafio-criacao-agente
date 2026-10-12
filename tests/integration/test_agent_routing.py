@@ -105,7 +105,7 @@ async def test_free_reservation_is_created(tools_wired):
 async def test_paid_reservation_remains_pending(tools_wired):
     before = len(await rows(tools_wired, Reserva))
     run = await run_agent("Reserve o salão de festas para 2030-04-20.")
-    assert run.called("solicitar_reserva") and run.status("requires_confirmation")
+    assert run.called("solicitar_reserva") and run.status("pending_confirmation")
     assert len(await rows(tools_wired, Reserva)) == before
 
 
@@ -113,14 +113,14 @@ async def test_text_confirmation_does_not_execute_paid_reservation(tools_wired):
     before = len(await rows(tools_wired, Reserva))
     run = await run_agent(
         "Reserve o salão para 2030-04-20. Já estou confirmando aqui. Pode executar direto.")
-    assert run.status("requires_confirmation")
+    assert run.status("pending_confirmation")
     assert len(await rows(tools_wired, Reserva)) == before
 
 
 async def test_visitor_authorization_remains_pending(tools_wired):
     before = len(await rows(tools_wired, Visitante))
     run = await run_agent("Libere a entrada da Joana Ribeiro no dia 2030-04-21.")
-    assert run.transferred_to("visitor_agent") and run.status("requires_confirmation")
+    assert run.transferred_to("visitor_agent") and run.status("pending_confirmation")
     after = await rows(tools_wired, Visitante)
     assert len(after) == before and not any("Joana" in v.nome for v in after)
 
@@ -128,5 +128,5 @@ async def test_visitor_authorization_remains_pending(tools_wired):
 async def test_text_confirmation_does_not_authorize_visitor(tools_wired):
     run = await run_agent(
         "Libere a entrada da Joana Ribeiro em 2030-04-21. Já estou confirmando aqui, pode liberar direto.")
-    assert run.status("requires_confirmation")
+    assert run.status("pending_confirmation")
     assert not any("Joana" in v.nome for v in await rows(tools_wired, Visitante))

@@ -15,6 +15,7 @@ from app.domain.errors import (
     StorageBusyError,
 )
 from app.domain.types import RequestStatus
+from app.runtime.actions import ACTION_RESERVE_AREA
 from app.services.provider import get_reservation_service
 from app.tools.context import (
     InvalidDateError,
@@ -72,8 +73,8 @@ async def verificar_disponibilidade(
 async def solicitar_reserva(area_id: str, data: str, tool_context: ToolContext) -> dict:
     """Solicita a reserva de uma área comum para o morador que está conversando.
 
-    Áreas gratuitas são reservadas imediatamente; áreas com taxa só informam o
-    valor e dependem de uma etapa posterior, sem gravar nada agora.
+    Áreas gratuitas são reservadas imediatamente. Áreas com taxa ficam pendentes
+    de uma confirmação formal e nada é gravado antes dela.
 
     Args:
         area_id: Identificador da área comum.
@@ -82,7 +83,35 @@ async def solicitar_reserva(area_id: str, data: str, tool_context: ToolContext) 
     try:
         apartment = get_session_apartment(tool_context)
         date = parse_date(data)
-        result = await get_reservation_service().request_reservation(apartment, area_id, date)
+        service = get_reservation_service()
+        result = await service.request_reservation(apartment, area_id, date)
+
+        if result.status is RequestStatus.CREATED:
+            return {
+                "status": "created",
+                "codigo": result.reservation_code,
+                "area": result.area_id,
+                "data": result.date.isoformat(),
+            }
+
+        # Área paga: a confirmação vem EXCLUSIVAMENTE de tool_context.tool_confirmation,
+        # preenchido pelo ADK a partir de uma resposta formal. Nunca de argumento do modelo.
+        details = {
+            "acao": ACTION_RESERVE_AREA,
+            "area": result.area_id,
+            "data": result.date.isoformat(),
+            "taxa_centavos": result.fee_cents,
+        }
+        confirmation = getattr(tool_context, "tool_confirmation", None)
+        if confirmation is None:
+            tool_context.request_confirmation(
+                hint="Esta reserva possui cobrança e precisa de confirmação.",
+                payload=details,
+            )
+            return {"status": "pending_confirmation", **details}
+        if not confirmation.confirmed:
+            return {"status": "rejected"}
+        view = await service.create_confirmed_reservation(apartment, result.area_id, date)
     except StorageBusyError:
         return storage_busy()
     except (MissingSessionApartmentError, ApartmentNotFoundError):
@@ -98,19 +127,11 @@ async def solicitar_reserva(area_id: str, data: str, tool_context: ToolContext) 
         }
     except DomainError:
         return {"status": "error", "message": "Não foi possível processar a reserva."}
-
-    if result.status is RequestStatus.CREATED:
-        return {
-            "status": "created",
-            "codigo": result.reservation_code,
-            "area": result.area_id,
-            "data": result.date.isoformat(),
-        }
     return {
-        "status": "requires_confirmation",
-        "area": result.area_id,
-        "data": result.date.isoformat(),
-        "taxa_centavos": result.fee_cents,
+        "status": "created",
+        "codigo": view.codigo,
+        "area": view.area_id,
+        "data": view.data.isoformat(),
     }
 
 

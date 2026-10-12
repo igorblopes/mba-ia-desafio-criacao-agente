@@ -1,6 +1,6 @@
 # Riscos técnicos — Residencial Aurora
 
-> **Status do documento (11/10/2026):** registro de riscos com evidências dos Passos 2 a 5 e das regressões de integridade e contenção. A seção de status de cada risco distingue o que foi validado e o que permanece pendente.
+> **Status do documento (11/10/2026):** registro de riscos com evidências dos Passos 2 a 7 e das regressões de integridade e contenção. A seção de status de cada risco distingue o que foi validado e o que permanece pendente.
 > "Como validar" descreve o plano completo; verificações já executadas estão identificadas nas evidências e em [garantias.md](garantias.md#estado-atual-e-evidências). Arquivo existente não implica funcionalidade implementada.
 
 Documentos relacionados: [`garantias.md`](garantias.md) · [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md)
@@ -28,7 +28,12 @@ Documentos relacionados: [`garantias.md`](garantias.md) · [`decisoes-arquitetur
 ## RT-001 — Tool Confirmation + sessão persistente
 
 ### Status
-Aberto — **risco técnico prioritário** do projeto.
+Aberto — **risco técnico prioritário** do projeto. Dividido a partir do Passo 7:
+
+| Parte | Situação |
+|---|---|
+| Tool Confirmation em sessão compatível (`InMemorySessionService`, Runner real, ADK 2.9.1) | **Validado** com LLM roteirizado (`tests/test_tool_confirmation_scripted.py`): pausa, `FunctionResponse` formal, retomada, aprovação grava uma vez, rejeição não grava. Com Gemini real: testes escritos em `tests/integration/test_tool_confirmation.py`, **não executados** onde não havia chave. |
+| Tool Confirmation + `DatabaseSessionService` + SQLite + restart | **Ainda aberto** — não testado no Passo 7 (Passo 8). |
 
 **Evidência parcial (Passo 2):** `DatabaseSessionService` + SQLite persistiu sessão, `state` e evento mínimo entre processos distintos. **Isto NÃO resolve o RT-001:** Tool Confirmation com sessão persistida e a retomada após aprovação continuam **não validadas** (exigem agente/Runner, previstos para etapa posterior).
 
@@ -80,7 +85,7 @@ Variante de reinício: a confirmação é criada, a API é reiniciada e a aprova
 ## RT-002 — Retomada da confirmação no agente errado
 
 ### Status
-Aberto
+Em validação — **Passo 7:** com sessão InMemory e Concierge como root, a resposta formal retomou a Tool no agente que a pediu (`reservation_agent` para reserva, `visitor_agent` para visitante; conferido em eventos e efeito no banco). Topologia mantida. Ainda não validado com sessão persistida, restart nem duas confirmações simultâneas.
 
 ### Impacto
 **Alto.** Afeta diretamente a Garantia 1 e a escolha da topologia de agentes.
@@ -232,7 +237,7 @@ O retorno da tool de regulamento fica registrado nos eventos e acompanha o hist�
 ## RT-006 — Reutilização de confirmation ID
 
 ### Status
-Aberto
+Aberto — **Passo 7 (descoberta, não proteção):** o ADK não impede a segunda resposta ao mesmo `id`; ele re-executa a Tool. Reserva ficou contida só pela exclusividade do banco; **autorização de visitante duplicou (2 registros)**. `id` inexistente levanta `ValueError` no ADK. A garantia (409 / execução única) precisa ser implementada pela aplicação no Passo 8.
 
 ### Impacto
 **Alto.** Pode causar execução duplicada de ação com cobrança ou liberação de acesso.

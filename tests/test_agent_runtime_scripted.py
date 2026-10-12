@@ -83,7 +83,7 @@ async def test_paid_reservation_and_text_bypass_stay_pending(tools_wired):
     ):
         _, calls, resps = await _run(text)
         assert any(c[0] == "reservation_agent" and c[1] == "solicitar_reserva" for c in calls)
-        assert any(r.get("status") == "requires_confirmation" for r in resps)
+        assert any(r.get("status") == "pending_confirmation" for r in resps)
     assert len(await _rows(tools_wired, Reserva)) == before
 
 
@@ -97,7 +97,7 @@ async def test_visitor_routed_and_not_persisted(tools_wired):
         _, calls, resps = await _run(text)
         assert ("concierge_agent", "transfer_to_agent", {"agent_name": "visitor_agent"}) in calls
         assert any(c[0] == "visitor_agent" for c in calls)
-        assert any(r.get("status") == "requires_confirmation" for r in resps)
+        assert any(r.get("status") == "pending_confirmation" for r in resps)
     rows = await _rows(tools_wired, Visitante)
     assert len(rows) == before and not any("Joana" in v.nome for v in rows)
 
