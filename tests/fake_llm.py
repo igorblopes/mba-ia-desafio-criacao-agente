@@ -36,8 +36,14 @@ class ScriptedLlm(BaseLlm):
         found = [k for name, k in kinds.items() if f'internal name is "{name}"' in instruction]
         assert len(found) == 1, instruction[:300]
         kind = found[0]
+        # Última mensagem textual REAL do usuário (permite várias mensagens na mesma sessão).
+        # Após uma transferência o ADK injeta o histórico de outros agentes como texto de role
+        # user ("[agente] ... BEGIN_QUOTED_AGENT_CONTENT"); isso não é fala do morador.
         user_text = next(
-            (p.text for c in contents if c.role == "user" for p in (c.parts or []) if p.text), ""
+            (p.text for c in reversed(contents) if c.role == "user"
+             for p in (c.parts or [])
+             if p.text and "BEGIN_QUOTED_AGENT_CONTENT" not in p.text
+             and not p.text.startswith("For context")), ""
         )
         step = self.plan(kind, user_text)  # type: ignore[operator]
         if step is None:

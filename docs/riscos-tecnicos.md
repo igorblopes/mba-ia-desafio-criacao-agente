@@ -14,14 +14,14 @@ Documentos relacionados: [`garantias.md`](garantias.md) · [`decisoes-arquitetur
 
 | ID | Risco | Impacto | Garantia afetada | Quando validar |
 |---|---|---|---|---|
-| [RT-001](#rt-001--tool-confirmation--sessão-persistente) | Tool Confirmation + sessão persistente | **Alto** | 1, 3 | Validado offline; Gemini e HTTP pendentes |
+| [RT-001](#rt-001--tool-confirmation--sessão-persistente) | Tool Confirmation + sessão persistente | **Alto** | 1, 3 | Validado offline e via HTTP (LLM roteirizado); Gemini pendente |
 | [RT-002](#rt-002--retomada-da-confirmação-no-agente-errado) | Retomada da confirmação no agente errado | **Alto** | 1 | Validado offline; Gemini e múltiplas pendências na mesma sessão pendentes |
-| [RT-003](#rt-003--concorrência-de-reservas) | Concorrência de reservas | **Alto** | 5 | Domínio e confirmações no runtime validados; HTTP pendente |
+| [RT-003](#rt-003--concorrência-de-reservas) | Concorrência de reservas | **Alto** | 5 | Domínio, runtime e HTTP (`200`/`200`, uma reserva) validados com LLM roteirizado |
 | [RT-004](#rt-004--vazamento-de-identidade-entre-apartamentos) | Vazamento de identidade entre apartamentos | **Alto** | 2 | Contínuo, desde a primeira tool |
 | [RT-005](#rt-005--excesso-de-conteúdo-do-regulamento-nos-eventos) | Excesso de conteúdo do regulamento nos eventos | Médio | 4 | **Mitigado no Passo 9** (testes offline); Gemini real pendente |
-| [RT-006](#rt-006--reutilização-de-confirmation-id) | Reutilização de confirmation ID | **Alto** | 1 | Proteção no runtime validada; tradução HTTP pendente |
+| [RT-006](#rt-006--reutilização-de-confirmation-id) | Reutilização de confirmation ID | **Alto** | 1 | Proteção no runtime e `409` HTTP validados (LLM roteirizado) |
 
-**Prioridade atual:** executar integrações com Gemini; na etapa HTTP, validar o contrato, isolamento e concorrência. Manter explícita a limitação de recuperação de PROCESSING. As evidências offline não substituem essas validações.
+**Prioridade atual:** executar integrações com Gemini e a rodada adversarial (Passo 11); contrato, isolamento e concorrência HTTP já têm testes com LLM roteirizado. Manter explícita a limitação de recuperação de PROCESSING. As evidências offline não substituem essas validações.
 
 ---
 
@@ -292,3 +292,13 @@ Questões que a validação dos riscos acima deve responder:
 - A exportação integral de eventos substitui a projeção resumida em `get_events`; `test_runtime_events.py` cobre partes mistas/metadados e o teste de ouro compara conteúdo completo entre processos. A futura API deve usar essa exportação.
 - Falha do teto do primeiro trecho corrigida e coberta com parágrafo sintético maior que 3000 caracteres. Nenhum arquivo de `dados/` foi alterado.
 - Integração de regulamento reforçada: “não encontrei” não neutraliza indicadores de uma regra inventada. O detector é conservador, não uma prova semântica universal. Gemini continua sem validação quando os testes são pulados por falta de configuração.
+
+## Revisão do Passo 10 (HTTP)
+
+Evidências em `tests/api/` com LLM roteirizado; nenhum risco foi dado como encerrado só por existir endpoint.
+
+- **RT-001:** pendência sobrevive a restart de processo `uvicorn` e é aprovada depois (`test_api_restart.py`). Pendente: Gemini real.
+- **RT-003:** duas aprovações HTTP simultâneas (101 × 201, salão, 2030-05-11) → `200`/`200` e exatamente uma reserva ativa; sem `500`. Pendente: repetição sob carga maior e com Gemini.
+- **RT-004:** sessão 101 afirmando ser o 302 não obtém `RSV-4821` nem visitante do 302, nem na resposta nem nos eventos; cancelamento alheio devolve `not_found`. Pendente: injeção de prompt com modelo real.
+- **RT-005:** eventos HTTP da consulta à piscina contêm só os trechos recuperados. Pendente: perguntas variadas com Gemini.
+- **RT-006:** replay, ID inexistente e ID de outra sessão → `409` sem novo efeito. Pendente: reconciliação de `PROCESSING` órfão.

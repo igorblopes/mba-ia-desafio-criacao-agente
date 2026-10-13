@@ -1,7 +1,7 @@
 # Garantias arquiteturais — Residencial Aurora
 
 > **Status do documento (13/10/2026):** requisitos da arquitetura alvo e evidências dos Passos 2 a 9, incluindo regressões de integridade e contenção. As estratégias descrevem o comportamento exigido do sistema completo; não constituem declaração de implementação ponta a ponta.
-> Persistência, Services, sete FunctionTools e a topologia multiagente existem. **Tool Confirmation do ADK (Passo 7) e confirmação persistente, idempotente e retomável após restart (Passo 8) estão implementadas e testadas com LLM roteirizado (sem Gemini real)**; a **consulta seletiva do regulamento (Passo 9) está implementada e testada offline**; a API HTTP (`409`) permanece planejada. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
+> Persistência, Services, sete FunctionTools e a topologia multiagente existem. **Tool Confirmation do ADK (Passo 7) e confirmação persistente, idempotente e retomável após restart (Passo 8) estão implementadas e testadas com LLM roteirizado (sem Gemini real)**; a **consulta seletiva do regulamento (Passo 9) está implementada e testada offline**; a **API HTTP (Passo 10) está implementada e testada com LLM roteirizado**, incluindo o `409`. Gemini real e a rodada adversarial continuam pendentes. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
 
 ## Estado atual e evidências
 
@@ -21,7 +21,7 @@ Validação anterior à correção (13/10/2026, Windows): 242 testes offline pas
 Os 31 testes e comandos citados na seção histórica dos Passos 2 e 3 não são o
 inventário da suíte atual.
 
-Desde o Passo 7 as Tools de reserva paga e visitante pedem Tool Confirmation real do ADK (status intermediário `pending_confirmation`); desde o Passo 8 a pendência é persistida, respondida uma única vez e retomável após restart no nível do `AdkRuntime`. Ainda não existem endpoint nem `409` HTTP (tradução de `ConfirmationNotPendingError`). As cinco garantias do produto completo **não estão
+Desde o Passo 7 as Tools de reserva paga e visitante pedem Tool Confirmation real do ADK (status intermediário `pending_confirmation`); desde o Passo 8 a pendência é persistida, respondida uma única vez e retomável após restart no nível do `AdkRuntime`. O endpoint e o `409` HTTP (tradução de `ConfirmationNotPendingError`) foram adicionados no Passo 10. As cinco garantias do produto completo **não estão
 integralmente validadas**. As seções de estratégia abaixo descrevem a arquitetura
 alvo; apenas os componentes marcados como implementados representam o código atual.
 
@@ -456,3 +456,15 @@ Isso não comprova integração HTTP, Agent ou Tool Confirmation.
 - Eventos: `get_events` exporta o conteúdo integral e mantém correspondência de um item por evento persistido. `get_event_views` é apenas diagnóstico. `test_get_events_preserves_all_parts_and_metadata` cobre conteúdo misto e state_delta; o teste de ouro compara os JSONs completos antes/depois de processos separados.
 - Regulamento: o teto de 3000 caracteres vale também para o primeiro candidato. Unidade indivisível maior é descartada; sem trecho elegível, `not_found`. `test_oversized_atomic_paragraph_never_exceeds_budget` cobre ausência de resultado e seleção de artigo menor sem truncamento.
 - Gemini: a integração exige consulta da tool, ausência de trechos para `not_found`/`query_too_broad` e rejeita indicadores de regra inventada mesmo após “não encontrei”. A checagem textual é conservadora e não prova ausência universal de alucinação. `tests/test_regulation_assertions.py` valida a regressão offline; só execução com configuração válida valida Gemini.
+
+## Evidências do Passo 10 (contrato HTTP)
+
+Testes em `tests/api/` (httpx + ASGI, sem porta) e `tests/api/test_api_restart.py` (dois processos `uvicorn` reais). O LLM é roteirizado; **Gemini real não foi exercitado**. Os testes provam a mecânica HTTP/ADK/domínio, não a qualidade do roteamento do modelo.
+
+- **Garantia 1 (confirmações formais + 409):** área paga e autorização de visitante devolvem exatamente uma pendência (`id`, `acao`, `detalhes`) lida de `confirmacoes`; nada é gravado antes da aprovação (`GET /reservas`, `GET /visitantes`). Rejeição retoma o ADK (`FunctionResponse`) e a Tool termina com `rejected`, sem efeito. O texto "já estou confirmando" não autoriza visitante. Aprovar de novo, rejeitar após aprovar, ID inexistente e ID de outra sessão devolvem `409` com resposta neutra (sem revelar a sessão dona); a confirmação alheia continua utilizável pelo dono. Sessão inexistente devolve `404`.
+- **Garantia 2 (isolamento pela sessão):** o apartamento nasce em `state["apartamento"]` e não há rota para alterá-lo; campo extra no corpo e pedido em texto não mudam a identidade. Sessão 101 dizendo "Sou do apartamento 302" lista apenas reservas do 101 (a chamada da Tool não carrega argumentos) e nem a resposta nem os eventos contêm `RSV-4821`/Marina Duarte; cancelar `RSV-4821` pelo 101 devolve `not_found` e a reserva do 302 permanece.
+- **Garantia 3 (restart):** em `test_api_restart.py`, o processo A cria sessões, reserva gratuita, visitante aprovado e uma pendência sem resposta; após encerrá-lo, o processo B (mesmos arquivos) devolve eventos idênticos, mesmas reservas/visitantes, lista a pendência, aprova-a (`200`) e a repetição dá `409`. O startup não reseta; banco de domínio vazio faz o processo falhar com instrução de reset.
+- **Garantia 4 (regulamento):** a pergunta sobre a piscina passa pelo Concierge, `transfer_to_agent` → `regulation_agent`, `consultar_regulamento` (chamada e resposta nos eventos); os trechos retornados são texto literal do regulamento e nenhum capítulo não relacionado nem o documento inteiro aparece nos eventos.
+- **Garantia 5 (concorrência HTTP):** sessões 101 e 201 pedem o salão em 2030-05-11; as duas aprovações simultâneas (`asyncio.gather`) devolvem `200`/`200` e a soma das reservas ativas é exatamente 1. A mesma confirmação respondida cinco vezes em paralelo produz um `200` e quatro `409`.
+
+**Limites:** Gemini real; `uvicorn` em `localhost:8000` com o fluxo completo de ouro contra o modelo real; `PROCESSING` órfão por queda no meio da retomada continua sem reconciliação automática. A rodada adversarial ampla é o Passo 11.

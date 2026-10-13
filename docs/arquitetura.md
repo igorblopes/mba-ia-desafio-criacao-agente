@@ -1,9 +1,9 @@
 # Arquitetura — Residencial Aurora
 
-> **Status do documento (13/10/2026):** arquitetura alvo e estado implementado até o Passo 9. Persistência, Services, sete FunctionTools, a topologia Concierge + Reservas + Visitantes + Regulamento, a confirmação persistente/retomável (Passo 8) e a consulta seletiva ao regulamento (Passo 9) existem; a API HTTP continua planejada.
+> **Status do documento (13/10/2026):** arquitetura alvo e estado implementado até o Passo 10. Persistência, Services, sete FunctionTools, a topologia Concierge + Reservas + Visitantes + Regulamento, a confirmação persistente/retomável (Passo 8), a consulta seletiva ao regulamento (Passo 9) e a camada FastAPI com o contrato HTTP (Passo 10) existem. Gemini real e a rodada adversarial (Passo 11) continuam pendentes.
 > Mudanças de decisão são registradas em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md). Decisão aceita não significa implementação ou validação ponta a ponta.
 
-## Estado atual até o Passo 9
+## Estado atual até o Passo 10
 
 - **Passo 2 — persistência validada:** modelos em `app/database/models.py`, criação do esquema em `schema.py`, conexão e sessões em `connection.py`, repositories e restauração em `scripts/reset.py`. O banco de domínio contém apartamentos, áreas, reservas e visitantes; a tabela de confirmações foi adicionada no Passo 8. Taxas são armazenadas em centavos inteiros.
 - **Sessão ADK:** `app/runtime/session_service.py` cria `DatabaseSessionService` separado do domínio. Sessão, estado e evento mínimo sobreviveram à troca de processo; isso não comprova Runner, conversa ou retomada de confirmação.
@@ -14,8 +14,9 @@
 - **Passo 7 — Tool Confirmation real implementada (sessão InMemory):** reserva com taxa e autorização de visitante chamam `tool_context.request_confirmation`; `app/runtime/confirmations.py` detecta `adk_request_confirmation` e gera `PendingConfirmation` (`id`, `invocation_id`, `agent_name`, `action`, `details`) e a resposta formal `FunctionResponse`. Detalhes e descobertas em [garantias.md](garantias.md#estado-atual-e-evidências).
 - **Passo 8 — confirmação persistente, idempotente e retomável:** `app/runtime/adk_runtime.py` (`AdkRuntime`) usa `DatabaseSessionService` + `ResumabilityConfig(is_resumable=True)`; o estado público da confirmação vive em `confirmacoes` (`condominio.db`) via `ConfirmationRepository`/`ConfirmationService` (`PENDING → PROCESSING → APPROVED | REJECTED`, claim atômico). Restart real validado em processos separados (LLM roteirizado).
 - **Passo 9 — Regulation Agent e consulta seletiva:** `app/agents/regulation.py` (somente a Tool `consultar_regulamento`), `app/tools/regulation.py`, `app/services/regulation_service.py` (normalização, ranking determinístico, limites, `query_too_broad`/`not_found`), `app/repositories/regulation_repository.py` (único acesso a `dados/regulamento.md`; parser Markdown em memória) e `app/domain/regulation.py`. Sem banco vetorial, sem rede, sem API key na busca.
-- **Ainda planejados:** rotas HTTP (e o `409`). `app/agents/regulamento.py`, `app/tools/regulamento.py`, `reservas.py` e `visitantes.py` (nomes em português) são placeholders antigos; as implementações estão nos módulos em inglês.
-- **Limite de confirmação:** não há endpoint nem `409` HTTP; Gemini real não foi exercitado com restart. A pendência é persistida (tabela + eventos ADK) e sobrevive a restart no nível do `AdkRuntime`.
+- **Passo 10 — contrato HTTP:** `app/main.py` (`create_app`, lifespan, routers, handlers) e `app/api/` (`schemas.py`, `sessoes.py`, `confirmacoes.py`, `verificacao.py`, `dependencies.py`, `errors.py`). A FastAPI é uma camada fina: valida o HTTP, encaminha ao `AdkRuntime`/Services e traduz erros de domínio (`404`/`409`). Um único `AdkRuntime` é criado no lifespan e guardado em `app.state.adk_runtime`; nada de sessões de moradores em memória. O startup **não** reseta dados: com o banco de domínio não inicializado, falha pedindo `uv run python -m scripts.reset`. `ApartmentService` (novo) só valida a existência do apartamento antes de criar a sessão.
+- **Ainda planejados:** validação com Gemini real e rodada adversarial (Passo 11). `app/agents/regulamento.py`, `app/tools/regulamento.py`, `reservas.py` e `visitantes.py` (nomes em português) são placeholders antigos; as implementações estão nos módulos em inglês.
+- **Limite de confirmação:** `POST /confirmacoes` e o `409` existem (Passo 10), validados com LLM roteirizado; Gemini real não foi exercitado com restart. A pendência é persistida (tabela + eventos ADK) e sobrevive a restart, inclusive entre processos `uvicorn`.
 - Resultados e limites da validação: [garantias.md](garantias.md#estado-atual-e-evidências).
 
 Documentos relacionados:
@@ -265,7 +266,7 @@ Complemento importante (ver [Garantia 2](garantias.md#garantia-2--cada-sessão-p
 
 ## 7. Fluxo de uma requisição
 
-> A camada HTTP dos diagramas é planejada. Agent, Runner e AdkRuntime estão implementados e testados offline.
+> A camada HTTP dos diagramas está implementada no Passo 10 (FastAPI → AdkRuntime/Services). Agent, Runner e AdkRuntime estão testados offline, também via HTTP.
 
 ### 7.1 Mensagem comum (sem confirmação)
 
@@ -337,7 +338,7 @@ sequenceDiagram
     API-->>M: 200 { resposta, confirmacoes_pendentes }
 ```
 
-> **Ordem implementada no Passo 8; HTTP futuro.** O claim atômico precede a retomada. Falhas sem novos eventos podem liberar para PENDING; falhas ambíguas mantêm PROCESSING, sem recuperação automática. Não há transação única entre os dois bancos. A futura API mapeará ConfirmationNotPendingError para 409.
+> **Ordem implementada no Passo 8; HTTP futuro.** O claim atômico precede a retomada. Falhas sem novos eventos podem liberar para PENDING; falhas ambíguas mantêm PROCESSING, sem recuperação automática. Não há transação única entre os dois bancos. A API mapeia ConfirmationNotPendingError para 409 (Passo 10).
 
 Pontos-chave (planejados):
 
@@ -375,7 +376,7 @@ O **estado inicial** do condomínio vem dos arquivos em `dados/` (somente leitur
 
 ### 8.2 `adk_sessions.db` — sessões e eventos do ADK
 
-Persistência de sessões e eventos via `DatabaseSessionService`, implementada em `app/runtime/session_service.py`. O restart do runtime já foi validado entre processos; a camada HTTP do fluxo abaixo continua pendente.
+Persistência de sessões e eventos via `DatabaseSessionService`, implementada em `app/runtime/session_service.py`. O restart do runtime já foi validado entre processos; o fluxo HTTP correspondente foi implementado e testado no Passo 10.
 
 Objetivo (Garantia 3):
 
@@ -501,7 +502,7 @@ app/runtime/adk_runtime.py
 Operações (**implementadas no Passo 8**): `create_session(apartment)`, `get_session()`, `send_message()`, `get_events()`, `list_pending_confirmations()` e `resume_confirmation(session_id, confirmation_id, confirmed)`.
 
 ```text
-FastAPI futura -> AdkRuntime -> Runner/App(resumability) -> DatabaseSessionService -> adk_sessions.db
+FastAPI -> AdkRuntime -> Runner/App(resumability) -> DatabaseSessionService -> adk_sessions.db
                       \-> ConfirmationService -> ConfirmationRepository -> condominio.db (confirmacoes)
 ```
 
@@ -513,7 +514,7 @@ O método `get_events(session_id)` devolve uma lista JSON integral, em ordem, co
 
 ## 11. Contrato da API (resumo)
 
-Contrato planejado das rotas, ainda não implementadas; o comportamento detalhado pertence ao enunciado do desafio.
+Contrato das rotas, **implementado no Passo 10** (`tests/api/`); o comportamento detalhado pertence ao enunciado do desafio.
 
 | Rota | Função |
 |---|---|
@@ -524,7 +525,7 @@ Contrato planejado das rotas, ainda não implementadas; o comportamento detalhad
 | `GET /apartamentos/{numero}/reservas` | Verificação: lê reservas direto dos dados, sem modelo |
 | `GET /apartamentos/{numero}/visitantes` | Verificação: lê visitantes direto dos dados, sem modelo |
 
-Rotas com `{session_id}` respondem `404` se a sessão não existir.
+Rotas com `{session_id}` respondem `404` se a sessão não existir. `POST /sessoes` e as rotas de verificação respondem `404` para apartamento inexistente. Confirmação inexistente, de outra sessão ou já respondida responde `409` (mesma resposta para os três casos). Validação Pydantic responde `422`; falha técnica na retomada, `503` (nada executou, repetir é seguro) ou `500` (resultado precisa ser verificado). Erros inesperados continuam `500`, sem mascaramento. `/mensagens` e `/confirmacoes` usam o mesmo envelope `{resposta, confirmacoes_pendentes:[{id, acao, detalhes}]}`; as pendências vêm de `confirmacoes` (estado real), nunca do texto da resposta, e refletem todas as pendências atuais da sessão.
 
 > Como `GET /sessoes/{id}/eventos` devolve o conteúdo **completo** dos eventos, qualquer dado que uma tool devolva ao modelo é **também** exposto ali. Isso reforça as Garantias 2 e 4 ([garantias.md](garantias.md)).
 
@@ -609,4 +610,23 @@ Resumo; o detalhe está em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.
 - Validação com Gemini da topologia `sub_agents` + transferência já comprovada offline.
 - Recuperação automática de PROCESSING órfão e comportamento de múltiplas pendências na mesma sessão. O ID já é o function_call_id (ADR-012).
 - Calibração da busca e redação com Gemini; granularidade por artigo, busca lexical e limites já definidos (ADR-009).
-- Contenção: espera limitada a 5000 ms, sem retry automático; `SQLITE_BUSY`/`SQLITE_LOCKED` viram `StorageBusyError` e as tools devolvem `temporarily_unavailable`. Integração HTTP ainda pendente. Já implementados: WAL, `busy_timeout=5000` e índice único parcial `uq_reservas_area_data_ativa`; código `RSV-` + 8 hex com até cinco tentativas, protegido pela PK e pelo histórico preservado (ADRs 008 e 011).
+- Contenção: espera limitada a 5000 ms, sem retry automático; `SQLITE_BUSY`/`SQLITE_LOCKED` viram `StorageBusyError` e as tools devolvem `temporarily_unavailable`. Integração HTTP coberta no Passo 10 (duas aprovações simultâneas → `200`/`200`, uma reserva ativa). Já implementados: WAL, `busy_timeout=5000` e índice único parcial `uq_reservas_area_data_ativa`; código `RSV-` + 8 hex com até cinco tentativas, protegido pela PK e pelo histórico preservado (ADRs 008 e 011).
+
+---
+
+## 14. Camada HTTP (Passo 10)
+
+```text
+HTTP -> FastAPI (app/api) -> AdkRuntime / Services -> Agents / Tools / Domain -> Persistência
+```
+
+| Rota | Sucesso | Runtime / Service |
+|---|---|---|
+| `POST /sessoes` | `201` | `ApartmentService.require_existing` + `AdkRuntime.create_session` |
+| `POST /sessoes/{id}/mensagens` | `200` | `AdkRuntime.send_message` |
+| `POST /sessoes/{id}/confirmacoes` | `200` | `AdkRuntime.resume_confirmation` + `list_pending_confirmations` |
+| `GET /sessoes/{id}/eventos` | `200` | `AdkRuntime.get_events` (`Event.model_dump(mode="json")`) |
+| `GET /apartamentos/{n}/reservas` | `200` | `ReservationService.list_active_reservations` |
+| `GET /apartamentos/{n}/visitantes` | `200` | `VisitorService.list_visitors` |
+
+Não existe rota que altere o apartamento de uma sessão, nem rotas administrativas. Execução: `uv run uvicorn app.main:app --host 127.0.0.1 --port 8000`. Reset de dados é sempre explícito (`uv run python -m scripts.reset`); subir a API nunca o faz.
