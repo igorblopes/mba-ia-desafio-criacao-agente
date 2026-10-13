@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from google.adk.agents import BaseAgent
+from google.adk.agents.invocation_context import LlmCallsLimitExceededError
+from google.adk.agents.run_config import RunConfig
 from google.adk.apps import App, ResumabilityConfig
 from google.adk.events import Event
 from google.adk.runners import Runner
@@ -32,7 +34,7 @@ from app.agents.concierge import build_concierge
 from app.agents.regulation import build_regulation_agent
 from app.agents.reservations import build_reservation_agent
 from app.agents.visitors import build_visitor_agent
-from app.domain.errors import ConfirmationResumeError, SessionNotFoundError
+from app.domain.errors import AgentRunLimitError, ConfirmationResumeError, SessionNotFoundError
 from app.domain.types import ConfirmationRecord, ConfirmationStatus
 from app.runtime.confirmations import (
     CONFIRMATION_FUNCTION_NAME,
@@ -49,6 +51,12 @@ APP_NAME = "residencial_aurora"
 # A identidade do morador NÃO vem do user_id do ADK (é só chave de partição de sessões);
 # vem de ``state["apartamento"]``. Um valor fixo evita criar uma segunda fonte de identidade.
 RUNTIME_USER_ID = "morador"
+
+# Teto de chamadas de LLM por execução. O padrão do ADK (500) deixa um modelo em laço (ex.: emitindo
+# a função reservada ``adk_request_confirmation``, que o ADK remove do contexto e portanto repete
+# para sempre) gastar ~500 chamadas e terminar em HTTP 500 (ADV-050 / F-1). Um fluxo legítimo usa
+# poucas: concierge -> transferência -> especialista -> Tool -> resposta (+ encadeamentos de Tools).
+MAX_LLM_CALLS_PER_RUN = 25
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,12 +221,20 @@ class AdkRuntime:
     # ---------------------------------------------------------------- mensagens
 
     async def _run(self, session_id: str, message: types.Content) -> list[Event]:
-        return [
-            ev
-            async for ev in self._runner.run_async(
-                user_id=RUNTIME_USER_ID, session_id=session_id, new_message=message
-            )
-        ]
+        try:
+            return [
+                ev
+                async for ev in self._runner.run_async(
+                    user_id=RUNTIME_USER_ID,
+                    session_id=session_id,
+                    new_message=message,
+                    run_config=RunConfig(max_llm_calls=MAX_LLM_CALLS_PER_RUN),
+                )
+            ]
+        except LlmCallsLimitExceededError as exc:
+            logger.error("agent_run_limit_exceeded session_id=%s limit=%d",
+                         session_id, MAX_LLM_CALLS_PER_RUN)
+            raise AgentRunLimitError() from exc
 
     async def _register_pending(self, session_id: str, events: Iterable[Event]) -> None:
         for p in extract_pending_confirmations(events):
@@ -234,9 +250,18 @@ class AdkRuntime:
     async def send_message(self, session_id: str, text: str) -> MessageResult:
         """Texto do morador. Se o ADK pedir confirmação, ela é persistida como PENDING."""
         await self._require_session(session_id)
-        events = await self._run(
-            session_id, types.Content(role="user", parts=[types.Part(text=text)])
-        )
+        try:
+            events = await self._run(
+                session_id, types.Content(role="user", parts=[types.Part(text=text)])
+            )
+        except AgentRunLimitError:
+            # Pedidos de confirmação REAIS já gravados pelo ADK antes do laço não podem ficar
+            # sem registro: reconcilia (best-effort) antes de devolver o erro controlado.
+            try:
+                await self.list_pending_confirmations(session_id)
+            except Exception:  # noqa: BLE001 - o erro original prevalece
+                logger.exception("reconcile_after_run_limit_failed session_id=%s", session_id)
+            raise
         await self._register_pending(session_id, events)
         session = await self._require_session(session_id)
         return MessageResult(

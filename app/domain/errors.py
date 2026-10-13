@@ -64,6 +64,16 @@ class SessionNotFoundError(DomainError):
         super().__init__("Sessão não encontrada.")
 
 
+class AgentRunLimitError(DomainError):
+    """O modelo excedeu o teto de chamadas de LLM de UMA execução (laço descontrolado).
+
+    Mensagem genérica: não revela Tools, nomes internos nem o motivo do laço.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("O assistente não conseguiu concluir o pedido. Tente reformulá-lo.")
+
+
 class ConfirmationError(DomainError):
     """Base dos erros do ciclo de vida de confirmações."""
 

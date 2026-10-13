@@ -10,14 +10,16 @@ from app.domain.errors import SessionNotFoundError
 async def test_get_events_preserves_all_parts_and_metadata(adk_runtime):
     info = await adk_runtime.create_session("101")
     session = await adk_runtime._require_session(info.id)
+    # Timestamps explícitos e crescentes: o armazenamento ordena por timestamp, e no Windows o relógio
+    # (~15 ms) pode dar o MESMO valor a dois eventos criados em sequência, tornando a ordem indefinida.
     events = [
-        Event(author="reservation_agent", invocation_id="mixed", content=types.Content(
+        Event(author="reservation_agent", invocation_id="mixed", timestamp=1_000.0, content=types.Content(
             role="model", parts=[
                 types.Part(text="Texto junto da chamada."),
                 types.Part(function_call=types.FunctionCall(id="call-a", name="example", args={"data": "2030-04-20"})),
                 types.Part(function_response=types.FunctionResponse(id="call-b", name="other", response={"status": "success", "nested": [1, 2]})),
             ])),
-        Event(author="reservation_agent", invocation_id="state-only",
+        Event(author="reservation_agent", invocation_id="state-only", timestamp=1_001.0,
               actions=EventActions(state_delta={"audit_marker": "preserved"})),
     ]
     for event in events:
