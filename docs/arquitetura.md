@@ -1,11 +1,11 @@
 # Arquitetura — Residencial Aurora
 
-> **Status do documento (11/10/2026):** arquitetura alvo e estado implementado até o Passo 7. Persistência, Services, seis FunctionTools, a topologia Concierge + Reservas + Visitantes e a Tool Confirmation do ADK (sessão InMemory) existem; HTTP, persistência de confirmações/restart e o agente de regulamento continuam planejados.
+> **Status do documento (13/10/2026):** arquitetura alvo e estado implementado até o Passo 9. Persistência, Services, sete FunctionTools, a topologia Concierge + Reservas + Visitantes + Regulamento, a confirmação persistente/retomável (Passo 8) e a consulta seletiva ao regulamento (Passo 9) existem; a API HTTP continua planejada.
 > Mudanças de decisão são registradas em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md). Decisão aceita não significa implementação ou validação ponta a ponta.
 
-## Estado atual dos Passos 2 a 5
+## Estado atual até o Passo 9
 
-- **Passo 2 — persistência validada:** modelos em `app/database/models.py`, criação do esquema em `schema.py`, conexão e sessões em `connection.py`, repositories e restauração em `scripts/reset.py`. O banco de domínio contém apartamentos, áreas, reservas e visitantes; a tabela de confirmações ainda não existe. Taxas são armazenadas em centavos inteiros.
+- **Passo 2 — persistência validada:** modelos em `app/database/models.py`, criação do esquema em `schema.py`, conexão e sessões em `connection.py`, repositories e restauração em `scripts/reset.py`. O banco de domínio contém apartamentos, áreas, reservas e visitantes; a tabela de confirmações foi adicionada no Passo 8. Taxas são armazenadas em centavos inteiros.
 - **Sessão ADK:** `app/runtime/session_service.py` cria `DatabaseSessionService` separado do domínio. Sessão, estado e evento mínimo sobreviveram à troca de processo; isso não comprova Runner, conversa ou retomada de confirmação.
 - **Passo 3 — regras funcionais validadas; contenção corrigida:** services de reservas e visitantes, DTOs e erros em `app/domain/`, testes isolados em `tests/`. A criação de reserva separa validação e escrita; cancelamento e autorização de visitante validam e escrevem na mesma sessão. Contenção SQLite é traduzida em `StorageBusyError`, com rollback e resposta segura nas tools (RT-003; `tests/test_persistence_failures.py`).
 - **Passo 4 — validado no domínio:** índice único parcial, sessões independentes, rollback, colisão de código, 25 corridas repetidas e classificação da violação SQLite original. Banco ocupado vira `StorageBusyError`; não há retry automático de contenção.
@@ -13,7 +13,8 @@
 - **Passo 6 — topologia multiagente implementada:** `app/agents/concierge.py` (root), `reservations.py` e `visitors.py`, com o modelo vindo de `get_settings().gemini_model`. Estrutura e tools por agente são cobertas por `tests/test_agent_structure.py`; `tests/test_agent_runtime_scripted.py` executa o Runner real do ADK com um modelo roteirizado (sem rede). Testes com Gemini real ficam em `tests/integration/` (`-m integration`) e só provam algo quando executados com chave.
 - **Passo 7 — Tool Confirmation real implementada (sessão InMemory):** reserva com taxa e autorização de visitante chamam `tool_context.request_confirmation`; `app/runtime/confirmations.py` detecta `adk_request_confirmation` e gera `PendingConfirmation` (`id`, `invocation_id`, `agent_name`, `action`, `details`) e a resposta formal `FunctionResponse`. Detalhes e descobertas em [garantias.md](garantias.md#estado-atual-e-evidências).
 - **Passo 8 — confirmação persistente, idempotente e retomável:** `app/runtime/adk_runtime.py` (`AdkRuntime`) usa `DatabaseSessionService` + `ResumabilityConfig(is_resumable=True)`; o estado público da confirmação vive em `confirmacoes` (`condominio.db`) via `ConfirmationRepository`/`ConfirmationService` (`PENDING → PROCESSING → APPROVED | REJECTED`, claim atômico). Restart real validado em processos separados (LLM roteirizado).
-- **Ainda planejados:** rotas HTTP (e o `409`), agente e tool de regulamento. Os respectivos arquivos são estruturas iniciais. `app/tools/reservas.py` e `visitantes.py` também são placeholders antigos; as implementações estão nos módulos em inglês.
+- **Passo 9 — Regulation Agent e consulta seletiva:** `app/agents/regulation.py` (somente a Tool `consultar_regulamento`), `app/tools/regulation.py`, `app/services/regulation_service.py` (normalização, ranking determinístico, limites, `query_too_broad`/`not_found`), `app/repositories/regulation_repository.py` (único acesso a `dados/regulamento.md`; parser Markdown em memória) e `app/domain/regulation.py`. Sem banco vetorial, sem rede, sem API key na busca.
+- **Ainda planejados:** rotas HTTP (e o `409`). `app/agents/regulamento.py`, `app/tools/regulamento.py`, `reservas.py` e `visitantes.py` (nomes em português) são placeholders antigos; as implementações estão nos módulos em inglês.
 - **Limite de confirmação:** não há endpoint nem `409` HTTP; Gemini real não foi exercitado com restart. A pendência é persistida (tabela + eventos ADK) e sobrevive a restart no nível do `AdkRuntime`.
 - Resultados e limites da validação: [garantias.md](garantias.md#estado-atual-e-evidências).
 
@@ -42,8 +43,8 @@ Tecnologias definidas:
 |---|---|
 | Linguagem | Python 3.12 (`>=3.12,<3.13` em `pyproject.toml`) |
 | Gerenciador de projeto | `uv` (`pyproject.toml` e `uv.lock` versionados) |
-| Framework de agentes | `google-adk[db]==2.9.1`, fixado no projeto; agentes ainda planejados |
-| Modelo | Gemini planejado, configurável por `GEMINI_MODEL`; não há modelo específico definido em `app/config.py` ou `.env.example` |
+| Framework de agentes | `google-adk[db]==2.9.1`, fixado no projeto; quatro agentes implementados |
+| Modelo | Gemini configurável por `GEMINI_MODEL`; não há modelo específico definido em `app/config.py` ou `.env.example` |
 | API | FastAPI |
 | Armazenamento | SQLite (dois bancos separados) |
 | Estrutura de agentes | Agente principal + três especialistas |
@@ -134,13 +135,14 @@ flowchart TD
 
 ## 4. Agentes
 
-Serão **quatro agentes**: um principal e três especialistas. **Implementados no Passo 6:** Concierge, Reservas e Visitantes. **Regulamento: planejado** (não conectado ao Concierge).
+São **quatro agentes**: um principal e três especialistas. **Implementados:** Concierge, Reservas e Visitantes (Passo 6) e Regulamento (Passo 9).
 
 ```text
 Concierge Agent (root, sem tools de negócio)
 ├── Reservation Agent  (listar_minhas_reservas, verificar_disponibilidade,
 │                       solicitar_reserva, cancelar_minha_reserva)
-└── Visitor Agent      (listar_meus_visitantes, solicitar_autorizacao_visitante)
+├── Visitor Agent      (listar_meus_visitantes, solicitar_autorizacao_visitante)
+└── Regulation Agent   (consultar_regulamento)
 ```
 
 | Agente | Papel | Acessa dados? |
@@ -152,7 +154,7 @@ Concierge Agent (root, sem tools de negócio)
 
 ### 4.1 Concierge Agent
 
-Agente principal; é o único que conversa diretamente com o morador.
+Agente principal de entrada. Após a transferência, o especialista também pode produzir a resposta ao morador; não há retorno obrigatório ao Concierge.
 
 **Responsabilidades**
 
@@ -197,13 +199,13 @@ Autorizar um visitante **libera acesso ao prédio**; portanto **sempre** exige c
 
 ### 4.4 Regulamento Agent
 
-Responsável por dúvidas sobre o regulamento. **Não recebe** o regulamento inteiro permanentemente no contexto; consulta somente os trechos relevantes por meio de uma tool que usa um serviço específico (ver seção 9).
+Responsável por dúvidas sobre o regulamento (`regulation_agent`). **Não recebe** o regulamento no contexto; sua única Tool, `consultar_regulamento(pergunta)`, devolve só os trechos relevantes à pergunta atual (ver seção 9). A instruction diz *como* responder (consultar sempre, usar apenas os trechos, declarar quando não houver informação) e não contém nenhuma regra do condomínio. Fluxo: `Concierge → Regulation Agent → consultar_regulamento → RegulationService → RegulationRepository → dados/regulamento.md`.
 
 ### 4.5 Como cada especialista é acionado
 
-A escolha inicial é **Root Agent + `sub_agents`, com transferência do Concierge para o especialista**. Essa topologia será a primeira implementação testada porque mantém explícito qual especialista solicitou uma confirmação.
+A escolha inicial é **Root Agent + `sub_agents`, com transferência do Concierge para o especialista**. Essa topologia está implementada e mantém explícito qual especialista solicitou uma confirmação.
 
-> **Escolha inicial sujeita a validação.** A transferência precisa funcionar com Tool Confirmation e sessão persistida. Se os testes do [RT-001](riscos-tecnicos.md#rt-001--tool-confirmation--sessão-persistente) ou do [RT-002](riscos-tecnicos.md#rt-002--retomada-da-confirmação-no-agente-errado) demonstrarem que a retomada não volta ao agente correto, a topologia poderá ser revista e a mudança deverá ser registrada em ADR. Ver [ADR-002](decisoes-arquiteturais.md#adr-002--arquitetura-multiagente).
+> **Validada offline nos Passos 7–8.** A transferência funciona com Tool Confirmation, sessão persistida e restart nos testes roteirizados. Gemini real permanece pendente. Se os testes do [RT-001](riscos-tecnicos.md#rt-001--tool-confirmation--sessão-persistente) ou do [RT-002](riscos-tecnicos.md#rt-002--retomada-da-confirmação-no-agente-errado) demonstrarem que a retomada não volta ao agente correto, a topologia poderá ser revista e a mudança deverá ser registrada em ADR. Ver [ADR-002](decisoes-arquiteturais.md#adr-002--arquitetura-multiagente).
 
 ---
 
@@ -263,7 +265,7 @@ Complemento importante (ver [Garantia 2](garantias.md#garantia-2--cada-sessão-p
 
 ## 7. Fluxo de uma requisição
 
-> Fluxos planejados: nenhuma rota HTTP ou execução de Agent/Runner está implementada.
+> A camada HTTP dos diagramas é planejada. Agent, Runner e AdkRuntime estão implementados e testados offline.
 
 ### 7.1 Mensagem comum (sem confirmação)
 
@@ -290,8 +292,7 @@ sequenceDiagram
     DB-->>S: sucesso ou conflito
     S-->>T: resultado (sem dados de terceiros)
     T-->>E: resultado limitado
-    E-->>C: resposta
-    C-->>RT: resposta final
+    E-->>RT: resposta do especialista (retorno ao Concierge não é obrigatório)
     RT-->>API: resposta + confirmações pendentes
     API-->>M: 200 { resposta, confirmacoes_pendentes }
 ```
@@ -328,15 +329,15 @@ sequenceDiagram
     API-->>M: 200 (nenhum efeito de negócio foi efetivado)
 
     M->>API: POST /confirmacoes { id, confirmado }
-    API->>DB: PENDING da sessão? (senão 409)
-    API->>DB: transição atômica PENDING → APPROVED/REJECTED
     API->>RT: resume_confirmation()
+    RT->>DB: claim PENDING da sessão → PROCESSING (senão erro de domínio)
     RT->>AG: retoma a execução no agente que pediu
-    AG->>DB: se aprovada: executa uma única vez
+    AG->>DB: se aprovada: executa a operação
+    RT->>DB: após resposta da Tool: APPROVED/REJECTED
     API-->>M: 200 { resposta, confirmacoes_pendentes }
 ```
 
-> **Fluxo conceitual e provisório.** O diagrama mostra o comportamento desejado, não uma ordem transacional já resolvida. Ainda será definido como coordenar a transição da confirmação, a retomada do ADK e a gravação do efeito de negócio, incluindo recuperação se houver falha entre essas etapas. Tornar `PENDING → APPROVED/REJECTED` atômico impede duas respostas vencedoras, mas, sozinho, não garante que uma aprovação seja efetivamente retomada e executada.
+> **Ordem implementada no Passo 8; HTTP futuro.** O claim atômico precede a retomada. Falhas sem novos eventos podem liberar para PENDING; falhas ambíguas mantêm PROCESSING, sem recuperação automática. Não há transação única entre os dois bancos. A futura API mapeará ConfirmationNotPendingError para 409.
 
 Pontos-chave (planejados):
 
@@ -374,7 +375,7 @@ O **estado inicial** do condomínio vem dos arquivos em `dados/` (somente leitur
 
 ### 8.2 `adk_sessions.db` — sessões e eventos do ADK
 
-Persistência de sessões e eventos via `DatabaseSessionService`, implementada em `app/runtime/session_service.py`. O fluxo completo abaixo ainda depende da API e do runtime.
+Persistência de sessões e eventos via `DatabaseSessionService`, implementada em `app/runtime/session_service.py`. O restart do runtime já foi validado entre processos; a camada HTTP do fluxo abaixo continua pendente.
 
 Objetivo (Garantia 3):
 
@@ -464,23 +465,28 @@ O regulamento completo (`dados/regulamento.md`) **não** é colocado:
 - nas instruções permanentes dos agentes;
 - no histórico da sessão como documento completo. Os trechos relevantes retornados pela tool podem aparecer nos eventos.
 
-Adota-se inicialmente recuperação determinística por títulos, seções e palavras-chave do próprio Markdown, sem banco vetorial. O serviço será semelhante a:
+Implementação (Passo 9) — recuperação local, determinística e offline:
 
 ```text
-RegulationService
+pergunta
 ↓
-dados/regulamento.md
+RegulationService: normaliza (caixa, acentos, pontuação) → tokens → stopwords → ranking (IDF; capítulo pesa mais)
 ↓
-identificação da seção relevante
+RegulationRepository: parse de dados/regulamento.md em memória (1 chunk por artigo)
 ↓
-retorno somente do trecho necessário
+no máximo MAX_RESULTS=3 artigos, MAX_RETURNED_CHARS=3000, texto original
 ```
 
-Exemplo: *"Até que horas a piscina funciona aos domingos?"* deve resultar apenas na informação necessária sobre piscina e domingos — **não** em piscina + garagem + animais + multas + churrasqueira + visitantes.
+- **Chunking:** o arquivo real tem só `#` e `##` (14 capítulos, 96 artigos `**Art. N.**`). `heading` = capítulo, `subheading` = artigo, `content` = texto integral do artigo (caput, incisos, parágrafos). Artigo acima de 1500 caracteres seria subdividido apenas entre parágrafos/listas (nenhum atinge o limite hoje).
+- **Fidelidade:** normalização só serve à busca; o conteúdo devolvido é o do arquivo (apenas CRLF→LF).
+- **Teto estrito:** inclusive o primeiro trecho deve caber nos 3000 caracteres de conteúdo somado. Uma unidade indivisível maior é descartada, nunca truncada; se nenhum candidato couber, retorna `not_found`.
+- **Respostas:** `success` (`trechos: [{secao, conteudo}]`, e `termos_nao_localizados` quando parte da pergunta não existe no documento), `not_found` (cobertura insuficiente dos termos da pergunta), `query_too_broad` (pedido de "tudo"/"inteiro"), `invalid_input`, `temporarily_unavailable`. Nenhuma devolve o documento inteiro e não há fallback para ele.
+- **Limites fixos em código:** o modelo só informa `pergunta`; não há parâmetro de caminho, quantidade ou "tudo".
+- **Sem estado/persistência:** nada vai para `session.state`, `condominio.db` ou `adk_sessions.db` como dado próprio; o Repository mantém só o cache em memória.
 
 Como as respostas de tools **aparecem nos eventos da sessão** (e são expostas por `GET /sessoes/{id}/eventos`), **a própria tool deve limitar os dados retornados**. Não adianta o agente "ignorar" o que recebeu: o que a tool devolve fica no histórico.
 
-> **Observação sobre o arquivo atual** (informação do repositório, não decisão): `dados/regulamento.md` está organizado em capítulos (`## Capítulo I … XIV`) subdivididos em artigos (`**Art. N.**`). A escolha inicial é localizar conteúdo pela estrutura e por palavras-chave. A granularidade final do trecho (capítulo, artigo ou parágrafo), os critérios de ranqueamento e o tratamento de perguntas ambíguas continuam provisórios — ver [ADR-009](decisoes-arquiteturais.md#adr-009--regulamento-consultado-sob-demanda).
+> **Observação sobre o arquivo atual:** `dados/regulamento.md` está organizado em capítulos (`## Capítulo I … XIV`) subdivididos em artigos (`**Art. N.**`); o chunking por artigo decorre dessa estrutura real. Limitação conhecida: a busca é lexical (com poucos sinônimos fixos), então perguntas com vocabulário distante do texto podem resultar em `not_found`. Ver [ADR-009](decisoes-arquiteturais.md#adr-009--regulamento-consultado-sob-demanda).
 
 ---
 
@@ -502,6 +508,8 @@ FastAPI futura -> AdkRuntime -> Runner/App(resumability) -> DatabaseSessionServi
 O restante da aplicação **não** deve depender dos detalhes internos da retomada de execução do ADK. Isso é necessário porque a retomada após uma confirmação pode depender do agente que a solicitou, da topologia dos agentes, do Runner, da configuração do App e do serviço de sessão persistente. Esse é o **risco técnico prioritário** do projeto: **Tool Confirmation + sessão persistida em SQLite** ([RT-001](riscos-tecnicos.md#rt-001--tool-confirmation--sessão-persistente)). Deve ser testado **cedo**.
 
 ---
+
+O método `get_events(session_id)` devolve uma lista JSON integral, em ordem, com um item por evento persistido, incluindo argumentos, respostas, conteúdo multipart e metadados. `get_event_views` e `ResumeResult.new_events` são resumos de diagnóstico, não o contrato de eventos completos. Evidências: `tests/test_runtime_events.py` e comparação integral entre subprocessos em `tests/test_confirmation_restart.py`.
 
 ## 11. Contrato da API (resumo)
 
@@ -587,6 +595,7 @@ residencial-aurora/
 Notas:
 
 - `dados/` (com **d**, em português) contém o estado inicial **somente leitura** do condomínio e o regulamento. `data/` (em inglês) contém os bancos SQLite **gerados**. Os nomes são muito parecidos; vale manter essa distinção explícita na documentação e evitar confusão no código.
+- Passo 9: o caminho do regulamento é `Tool → RegulationService → RegulationRepository → dados/regulamento.md` (arquivo, não SQLite). Arquivos novos: `app/agents/regulation.py`, `app/tools/regulation.py`, `app/repositories/regulation_repository.py`, `app/domain/regulation.py`; `app/services/regulation_service.py` deixou de ser placeholder.
 - Os arquivos `*.db` são artefatos de execução e **não** devem ser versionados.
 - As rotas de mensagens e eventos não têm arquivo próprio nesta proposta; a alocação (por exemplo, dentro de `api/sessoes.py`) fica para a implementação.
 - `scripts/reset.py` restaura o domínio a partir de `dados/` e, desde o Passo 8, **também apaga `adk_sessions.db` por padrão** (ADR-014); `--keep-sessions` preserva. RESET apaga estado de execução; RESTART não apaga nada.
@@ -597,7 +606,7 @@ Notas:
 
 Resumo; o detalhe está em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md) e [`riscos-tecnicos.md`](riscos-tecnicos.md).
 
-- Validação da escolha inicial `sub_agents` + transferência; eventual revisão da topologia se a retomada falhar.
-- Relação entre o `id` da confirmação do backend e o identificador da chamada pendente no ADK.
-- Granularidade e método de seleção de trechos do regulamento.
+- Validação com Gemini da topologia `sub_agents` + transferência já comprovada offline.
+- Recuperação automática de PROCESSING órfão e comportamento de múltiplas pendências na mesma sessão. O ID já é o function_call_id (ADR-012).
+- Calibração da busca e redação com Gemini; granularidade por artigo, busca lexical e limites já definidos (ADR-009).
 - Contenção: espera limitada a 5000 ms, sem retry automático; `SQLITE_BUSY`/`SQLITE_LOCKED` viram `StorageBusyError` e as tools devolvem `temporarily_unavailable`. Integração HTTP ainda pendente. Já implementados: WAL, `busy_timeout=5000` e índice único parcial `uq_reservas_area_data_ativa`; código `RSV-` + 8 hex com até cinco tentativas, protegido pela PK e pelo histórico preservado (ADRs 008 e 011).

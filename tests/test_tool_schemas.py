@@ -16,11 +16,14 @@ EXPECTED = {
     "cancelar_minha_reserva": {"codigo"},
     "listar_meus_visitantes": set(),
     "solicitar_autorizacao_visitante": {"nome", "data"},
+    "consultar_regulamento": {"pergunta"},
 }
 FORBIDDEN = {
     "apartamento", "apartment", "owner", "resident", "morador", "confirmed",
     "confirmation", "authorized", "autorizado", "force", "override", "bypass",
     "admin", "session_id", "tool_context",
+    "path", "file_path", "filename", "chapter", "section", "top_k", "max_results", "max_chars",
+    "full", "full_document", "all", "return_all", "return_full_document", "include_all",
 }
 
 
@@ -79,3 +82,10 @@ def test_no_confirmation_parameters_visible_to_model(tool):
     for word in ("confirmed", "confirmation", "approval", "approved", "confirmation_id",
                  "invocation_id", "agent_name"):
         assert word not in visible
+
+
+def test_regulation_tool_exposes_only_the_question():
+    from app.tools.regulation import consultar_regulamento_tool
+
+    assert _visible_params(consultar_regulamento_tool) == {"pergunta"}
+    assert consultar_regulamento_tool._require_confirmation is False

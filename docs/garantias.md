@@ -1,7 +1,7 @@
 # Garantias arquiteturais — Residencial Aurora
 
-> **Status do documento (12/10/2026):** requisitos da arquitetura alvo e evidências dos Passos 2 a 8, incluindo regressões de integridade e contenção. As estratégias descrevem o comportamento exigido do sistema completo; não constituem declaração de implementação ponta a ponta.
-> Persistência, Services, seis FunctionTools e a topologia multiagente existem. **Tool Confirmation do ADK (Passo 7) e confirmação persistente, idempotente e retomável após restart (Passo 8) estão implementadas e testadas com LLM roteirizado (sem Gemini real)**; a API HTTP (`409`) e a consulta do regulamento permanecem planejadas. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
+> **Status do documento (13/10/2026):** requisitos da arquitetura alvo e evidências dos Passos 2 a 9, incluindo regressões de integridade e contenção. As estratégias descrevem o comportamento exigido do sistema completo; não constituem declaração de implementação ponta a ponta.
+> Persistência, Services, sete FunctionTools e a topologia multiagente existem. **Tool Confirmation do ADK (Passo 7) e confirmação persistente, idempotente e retomável após restart (Passo 8) estão implementadas e testadas com LLM roteirizado (sem Gemini real)**; a **consulta seletiva do regulamento (Passo 9) está implementada e testada offline**; a API HTTP (`409`) permanece planejada. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
 
 ## Estado atual e evidências
 
@@ -9,13 +9,15 @@
 |---|---|---|
 | Passo 2 | Modelos, repositories, reset e fábrica `DatabaseSessionService`; verificações históricas descritas ao final | Persistência mínima não comprova continuidade de conversa ou confirmação |
 | Passo 3 | 31 testes de Services | Operações `create_confirmed_*` exigem chamador confiável; não validam aprovação externa |
-| Passo 4 | 15 testes de concorrência | Exclusividade comprovada no domínio, ainda sem HTTP/confirmadores concorrentes |
+| Passo 4 | 15 testes de concorrência | Exclusividade comprovada no domínio; confirmações concorrentes também cobertas no Passo 8; HTTP pendente |
 | Passo 5 | 31 testes de tools e schemas | Contexto simulado; duas chamadas também passam por `FunctionTool.run_async`; sem Agent/Runner |
 | Passo 7 | Tool Confirmation real (`request_confirmation`), parser de eventos, resposta formal, Runner real com LLM roteirizado | Sessão InMemory; Gemini real só com chave; sem `DatabaseSessionService`, restart, tabela de confirmações, API ou 409 |
 | Passo 8 | `AdkRuntime` (`create_session`, `send_message`, `get_events`, `resume_confirmation`), `DatabaseSessionService` + resumability, tabela `confirmacoes` (`PENDING/PROCESSING/APPROVED/REJECTED`), claim atômico; restart real em **processos Python separados** (`tests/test_confirmation_restart.py`) | LLM roteirizado; Gemini real só com chave (testes `integration` pulados sem ela); sem API HTTP; `PROCESSING` órfão após queda em plena retomada não é reconciliado automaticamente |
+| Passo 9 | `RegulationRepository` (parser Markdown, 96 artigos em 14 capítulos), `RegulationService` (ranking determinístico, `MAX_RESULTS=3`, `MAX_RETURNED_CHARS=3000`, `query_too_broad`, `not_found`), Tool `consultar_regulamento(pergunta)`, Regulation Agent, testes offline de parser, busca, tool, eventos e limites (`test_regulation_*`) | LLM roteirizado nos testes de eventos; Gemini real só com chave (`tests/integration/test_regulation_agent.py`, pulado sem ela); busca lexical |
 | Correções | 18 regressões de integridade e contenção | Locks reais nas escritas; códigos estendidos e tradução nas seis tools também exercitados por injeção de erro |
 
-A suíte offline atual soma **183 testes aprovados** (`uv run pytest`, após o Passo 8; eram 148 após o Passo 7), com bancos temporários e sem Gemini; os 20 testes `integration` ficaram `skipped` no ambiente de execução desse passo, sem `GOOGLE_API_KEY`. A execução do Passo 8 ocorreu em Linux/Python 3.12 (container); reexecute `uv run pytest` no Windows para confirmar no ambiente local. A auditoria atual não executa `uv sync` nem restaura bancos locais.
+Validação anterior à correção (13/10/2026, Windows): 242 testes offline passaram; 24 integrações foram puladas por falta de GOOGLE_API_KEY e/ou GEMINI_MODEL. A revisão acrescenta regressões para eventos completos, limite de retorno e detecção de respostas inventadas. Resultado final desta revisão: **251 testes offline aprovados**, 24 deselecionados (`uv run --frozen pytest -q`, Windows, 13/10/2026). Execução separada `uv run --frozen pytest -m integration -q -rs`: **24 pulados**, 251 deselecionados, por falta de GOOGLE_API_KEY e/ou GEMINI_MODEL. Não houve validação de Gemini real. Testes usam bancos temporários; os bancos locais não são restaurados.
+
 Os 31 testes e comandos citados na seção histórica dos Passos 2 e 3 não são o
 inventário da suíte atual.
 
@@ -73,16 +75,16 @@ Ações que não geram cobrança nem liberam acesso (reserva de área sem taxa, 
 ### Estratégia arquitetural
 
 1. Tools que geram cobrança ou liberam acesso **não executam diretamente**: usam o mecanismo de **Tool Confirmation do ADK** para ficarem pendentes.
-2. Em paralelo, o backend mantém **controle próprio** de confirmações (tabela conceitual `confirmacoes`, estados `PENDING` / `APPROVED` / `REJECTED`).
+2. Em paralelo, o backend mantém **controle próprio** de confirmações (tabela conceitual `confirmacoes`, estados `PENDING` / `PROCESSING` / `APPROVED` / `REJECTED`).
 3. A **única** forma de aprovar é o endpoint específico `POST /sessoes/{session_id}/confirmacoes`. Texto na conversa nunca é confirmação.
 4. O endpoint só aceita resposta para confirmação **`PENDING` daquela sessão**; qualquer outro caso recebe **409** e nada é executado.
-5. **Idempotência:** a transição `PENDING → APPROVED/REJECTED` deve ser atômica, de modo que uma confirmação só possa ser respondida uma vez. A coordenação entre essa transição, a retomada do ADK e o efeito de negócio ainda precisa garantir que a aprovação execute **uma única vez** e não se perca se houver falha intermediária.
+5. **Idempotência implementada:** claim atômico `PENDING → PROCESSING`, retomada do ADK e finalização `APPROVED/REJECTED` após resposta da Tool. Reenvios são barrados antes do Runner. Falhas ambíguas ficam em PROCESSING; recuperação automática desse estado continua pendente.
 6. A pendência aparece na resposta da API em `confirmacoes_pendentes`, com os detalhes do que será executado (por exemplo área e data; nome do visitante e data).
 7. Rejeição **não altera** dados de negócio.
 
 ### Componentes e estado de implementação
 
-> **Estado atual:** a regra de taxa e a separação request/execução estão nos services, e as Tools usam `tool_context.request_confirmation` / `tool_context.tool_confirmation` (Passo 7, validado em sessão InMemory). Os demais mecanismos abaixo são planejados; API é estrutura inicial e a tabela de confirmações não existe.
+> **Estado atual:** a regra de taxa e a separação request/execução estão nos services, e as Tools usam `tool_context.request_confirmation` / `tool_context.tool_confirmation` (Passo 7, validado em sessão InMemory). O Passo 8 adicionou tabela de confirmações, claim atômico e retomada persistente. Apenas a camada HTTP permanece planejada.
 
 **Evidências do Passo 7 (ADK 2.9.1, sessão `InMemorySessionService`):**
 
@@ -166,7 +168,7 @@ Existe uma exceção controlada: para verificar se uma data está livre é preci
 > O estado atual é explicitado nos itens implementados; os demais itens descrevem a integração planejada.
 
 - `app/api/sessoes.py` + `app/runtime/adk_runtime.py` — gravação do apartamento no estado ao criar a sessão (`create_session()`);
-- **Implementado (Passo 5):** `app/tools/context.py` (`get_session_apartment`), `app/tools/reservations.py` e `app/tools/visitors.py` — o apartamento é lido **somente** de `tool_context.state["apartamento"]`, sem valor padrão; sessão sem apartamento retorna `invalid_session`. Nenhuma Tool recebe apartamento, `confirmed`, `force`, `override` ou `bypass`, e `tool_context` não aparece no schema visível ao modelo (`tests/test_tool_schemas.py`). Testes (`tests/test_reservation_tools.py`, `test_visitor_tools.py`) comprovam isolamento entre 101 e 302 em listagem, cancelamento (resposta neutra `not_found`) e disponibilidade (somente booleano). Escopo da prova: Tools chamadas com `ToolContext` simulado; **não** há ainda sessão real de API nem Agent, então a proteção ponta a ponta continua pendente;
+- **Implementado (Passo 5):** `app/tools/context.py` (`get_session_apartment`), `app/tools/reservations.py` e `app/tools/visitors.py` — o apartamento é lido **somente** de `tool_context.state["apartamento"]`, sem valor padrão; sessão sem apartamento retorna `invalid_session`. Nenhuma Tool recebe apartamento, `confirmed`, `force`, `override` ou `bypass`, e `tool_context` não aparece no schema visível ao modelo (`tests/test_tool_schemas.py`). Testes (`tests/test_reservation_tools.py`, `test_visitor_tools.py`) comprovam isolamento entre 101 e 302 em listagem, cancelamento (resposta neutra `not_found`) e disponibilidade (somente booleano). Escopo da prova: Tools chamadas com `ToolContext` simulado; o Passo 6 acrescentou testes com Agent/Runner reais e modelo roteirizado; Gemini real e API permanecem pendentes;
 - `app/services/reservation_service.py` e `visitor_service.py` — validação de propriedade e filtros por apartamento já implementados no Passo 3; recebem identidade extraída pelas tools; criação e proteção do estado pela futura API continuam planejadas;
 - `app/repositories/*` — consultas usadas pelos services para dados do morador já filtram por apartamento. Existem também consultas globais para infraestrutura/verificação; disponibilidade exposta pelo service devolve apenas booleano;
 - `app/agents/*` — instruções dos agentes **não** carregam identidade nem regra de segurança.
@@ -252,36 +254,54 @@ O regulamento é longo (`dados/regulamento.md`, organizado em capítulos e artig
 
 ### Estratégia arquitetural
 
-1. O regulamento fica **fora** de qualquer prompt ou instrução permanente.
-2. Um **serviço específico** (`RegulationService`, conceitual) lê `dados/regulamento.md` e usa inicialmente títulos/seções e palavras-chave para localizar conteúdo, sem banco vetorial; retorna **somente** o trecho necessário.
-3. A tool do Regulamento Agent apenas expõe esse serviço; **a tool limita o que devolve**, pois o retorno vai para os eventos.
-4. O **Concierge não recebe** o regulamento.
-
-> **Provisório:** a abordagem inicial por estrutura e palavras-chave está definida, mas a granularidade final (capítulo, artigo ou parágrafo), o ranqueamento e o tratamento de ambiguidades ainda precisam ser calibrados. Para a pergunta *"Até que horas a piscina funciona aos domingos?"*, o ideal é retornar apenas o que trata de horários da piscina, não o capítulo inteiro nem outros capítulos. Ver [ADR-009](decisoes-arquiteturais.md#adr-009--regulamento-consultado-sob-demanda) e [RT-005](riscos-tecnicos.md#rt-005--excesso-de-conteúdo-do-regulamento-nos-eventos).
+1. O regulamento fica **fora** de qualquer prompt, instrução, `static_instruction` ou `session.state`.
+2. `RegulationRepository` é a única camada que abre `dados/regulamento.md` (parse em memória, 1 trecho por artigo). `RegulationService` normaliza a pergunta, ranqueia por IDF e devolve poucos trechos, sem banco vetorial, sem rede e sem LLM.
+3. A Tool `consultar_regulamento(pergunta)` só expõe esse serviço; **o código limita o que devolve** (quantidade e tamanho), pois o retorno vai para os eventos.
+4. O **Concierge não recebe** o regulamento nem a Tool; o fluxo é Concierge → Regulation Agent → Tool.
 
 ### Componentes e estado de implementação
 
-> O estado atual é explicitado nos itens implementados; os demais itens descrevem a integração planejada.
+**Implementado (Passo 9):**
 
-- **Planejado:** `app/services/regulation_service.py` — leitura do arquivo e seleção de trechos; atualmente apenas docstring;
-- **Planejado:** `app/tools/regulamento.py` — tool com retorno limitado; atualmente apenas docstring;
-- `app/agents/regulamento.py` — instruções **sem** o texto do regulamento;
-- `app/agents/concierge.py` — instruções **sem** o texto do regulamento.
+- `app/repositories/regulation_repository.py` — leitura e parser (`# `/`## `, artigos `**Art. N.**`); preserva o texto (CRLF→LF);
+- `app/domain/regulation.py` — `RegulationChunk` (heading, subheading, content, order), em memória;
+- `app/services/regulation_service.py` — normalização, stopwords, ranking, `MAX_RESULTS`, `MAX_RETURNED_CHARS`, `query_too_broad`, `not_found`;
+- `app/tools/regulation.py` — `consultar_regulamento` (somente leitura; sem confirmação; schema visível: `pergunta`);
+- `app/agents/regulation.py` — `regulation_agent` com somente essa Tool; instruction sem conteúdo do regulamento;
+- `app/agents/concierge.py` — instruções sem o regulamento; `regulation_agent` em `sub_agents`.
 
 ### Por que não depende do LLM
 
-- O que entra no contexto é decidido pelo **código** da tool/serviço, não pelo modelo.
-- Mesmo que o modelo "peça tudo", a tool só pode devolver o trecho selecionado, com limite de tamanho.
-- Nenhuma instrução do tipo "não repita o regulamento" é usada como proteção.
+- O que entra no contexto é decidido pelo **código** da tool/serviço, não pelo modelo (que nem vê parâmetros de quantidade, caminho ou "tudo").
+- Mesmo que o modelo "peça tudo", a tool devolve `query_too_broad` com `trechos: []`.
+- Nenhuma instrução do tipo "não repita o regulamento" é usada como proteção. As instruções de "não inventar" orientam a redação, mas a seleção de conteúdo e os limites são estruturais.
 
-### Como será validada posteriormente
+### Evidências (Passo 9)
 
-> **Planejado:**
+| Propriedade | Teste |
+|---|---|
+| Arquivo não entra em nenhum prompt | `test_no_agent_instruction_contains_any_regulation_text`, `test_root_instruction_does_not_contain_regulation_content`, `test_agent_modules_do_not_read_regulation_file` |
+| Só o Repository lê o arquivo | `test_tool_does_not_touch_state_or_session`, `test_agent_modules_do_not_read_regulation_file` |
+| Parser: seções, subseções, ordem, texto intacto | `tests/test_regulation_repository.py` (ex.: `test_no_line_of_the_document_is_lost_or_altered`) |
+| Retrieval seletivo (piscina no domingo → Art. 22 e 27, derivado do arquivo real) | `test_pool_on_sunday_returns_the_real_sunday_rule`, `test_pool_sunday_tool_response` |
+| Limite de trechos / de conteúdo | `test_result_limits`, `test_content_limit_never_cuts_a_chunk` |
+| Consulta ampla bloqueada | `test_broad_queries_are_blocked`, `test_broad_query_returns_no_excerpts` |
+| `not_found` sem fallback | `test_nonexistent_topic_is_not_found`, `test_not_found` |
+| Seção não relacionada ausente do retorno e dos eventos | `test_unrelated_chapter_text_is_not_returned`, `test_regulation_events_do_not_include_unrelated_sections` |
+| Documento inteiro ausente de retorno, eventos e sessão | `test_tool_does_not_return_the_whole_document`, `test_broad_query_through_agents_never_returns_document` |
+| Nada em `session.state` | `test_session_state_never_holds_regulation` |
+| Schema visível = `pergunta` | `test_regulation_tool_exposes_only_the_question`, `test_visible_parameters` |
+| Topologia e menor privilégio | `tests/test_agent_structure.py` |
+| Transfer + FunctionCall/FunctionResponse reais | `test_routing_events_pool_question` |
+| Runtime reconstruído continua funcional | `test_regulation_survives_runtime_rebuild` |
 
-- Perguntar sobre a piscina aos domingos → a resposta traz o horário de fechamento que consta em `dados/regulamento.md`.
-- Inspecionar `GET /sessoes/{id}/eventos` → **nenhum** evento contém trechos de capítulos que tratam de outros assuntos; os eventos incluem as chamadas de tool feitas na conversa.
-- Inspecionar as instruções do Concierge → sem regulamento.
-- Medir o tamanho dos retornos da tool de regulamento para perguntas variadas.
+Limites desta evidência: os testes de eventos usam LLM **roteirizado** (provam mecânica, não o roteamento nem a redação do Gemini). `tests/integration/test_regulation_agent.py` cobre roteamento, grounding, `not_found` e pergunta parcial com Gemini real, mas só roda com `GOOGLE_API_KEY` e `GEMINI_MODEL`; sem elas fica `skipped`. A busca é lexical: pergunta com vocabulário distante do texto pode retornar `not_found` (falso negativo seguro, nunca documento inteiro).
+
+### Como validar com Gemini real
+
+- `uv run pytest tests/integration/test_regulation_agent.py -m integration -v`;
+- Perguntar sobre a piscina aos domingos → horário que consta em `dados/regulamento.md` (9h às 20h);
+- Inspecionar os eventos da sessão → nenhum capítulo de outro assunto.
 
 ---
 
@@ -343,7 +363,7 @@ Dois moradores podem pedir a mesma área na mesma data — e aprovar a cobrança
 - **Apartamento continua vindo do `ToolContext`:** os agentes reutilizam as mesmas FunctionTools do Passo 5 (sem parâmetro de apartamento). `tests/test_agent_runtime_scripted.py` roda Runner, transferência, Tools, Services e banco reais com **modelo roteirizado**: sessão 101 nunca recebe dados do 302; `cancelar_minha_reserva("RSV-4821")` na sessão 101 retorna `not_found` e a reserva do 302 permanece; reserva paga e visitante retornam `requires_confirmation` sem gravar, inclusive com texto de "bypass".
 - **Regulamento fora do prompt:** `test_root_instruction_does_not_contain_regulation_content` e `test_agent_modules_do_not_read_regulation_file`.
 - **Agentes não acessam banco/Repository/Service:** `test_agent_modules_do_not_touch_database_repositories_or_services`.
-- **Limites:** o modelo roteirizado prova a mecânica (transferência, eventos de tool call/response, identidade), **não** o roteamento do Gemini. Os testes em `tests/integration/` cobrem isso, mas só valem quando executados com `GOOGLE_API_KEY` e `GEMINI_MODEL`. Prompt injection pode afetar a interpretação do modelo, mas não altera `session.state["apartamento"]`, não cria Tool privilegiada e não contorna Service nem banco. A Garantia 1 **não** está completa: Tool Confirmation real não existe.
+- **Limites:** o modelo roteirizado prova a mecânica (transferência, eventos de tool call/response, identidade), **não** o roteamento do Gemini. Os testes em `tests/integration/` cobrem isso, mas só valem quando executados com `GOOGLE_API_KEY` e `GEMINI_MODEL`. Prompt injection pode afetar a interpretação do modelo, mas não altera `session.state["apartamento"]`, não cria Tool privilegiada e não contorna Service nem banco. Tool Confirmation real foi implementada no Passo 7 e protegida contra reenvio pelo runtime no Passo 8; HTTP permanece pendente.
 
 ---
 
@@ -361,7 +381,7 @@ Registro público em `app/tools/__init__.py`; adaptadores em `reservations.py` e
 | `listar_meus_visitantes` | nenhum | `list_visitors` |
 | `solicitar_autorizacao_visitante` | `nome`, `data` | `request_authorization` |
 
-- `tests/test_tool_schemas.py`: seis tools, schemas sem identidade, confirmação ou parâmetros de bypass; `tool_context` é injetado e não exposto; operações `create_confirmed_*` não são tools; confirmação ADK desativada.
+- `tests/test_tool_schemas.py`: seis tools, schemas sem identidade, confirmação ou parâmetros de bypass; `tool_context` é injetado e não exposto; operações `create_confirmed_*` não são tools; no escopo histórico do Passo 5 não havia confirmação ADK; ela foi ativada no Passo 7.
 - `tests/test_reservation_tools.py`: identidade do contexto, cancelamento próprio/alheio, disponibilidade sem proprietário, criação gratuita, reserva paga sem gravação, entradas inválidas e contexto ausente. `test_function_tool_run_async_injects_context` exercita duas FunctionTools do ADK, com contexto simulado.
 - `tests/test_visitor_tools.py`: isolamento entre apartamentos, solicitação sem gravação, entrada inválida e ausência de contexto.
 - `get_session_apartment` verifica presença e formato básico, não autentica o usuário. Services validam a existência do apartamento nas operações pessoais. Disponibilidade exige identidade no estado, mas não consulta se o apartamento existe; retorna apenas booleano. A futura criação de sessão deverá validar a identidade.
@@ -390,7 +410,7 @@ Testes em `tests/test_reservation_concurrency.py` (`uv run pytest tests/test_res
 Testes de domínio em `tests/test_reservation_service.py` e `tests/test_visitor_service.py`, sem Gemini, Agent, ToolContext ou API. A suíte completa inclui também os testes ADK do Passo 5:
 
 - **Garantia 2 (isolamento, nível Service):** `list_active_reservations` e `list_visitors` filtram por apartamento na consulta SQL; `cancel_reservation` busca apenas entre as reservas ATIVAS do próprio apartamento, então reserva alheia e inexistente geram o mesmo `ReservationNotFoundError`, sem apartamento, código ou morador na mensagem. `is_available` devolve só `bool`. O parâmetro `apartment` é contexto confiável da aplicação; no Passo 5 as tools passaram a extraí-lo de `tool_context.state`. A criação da sessão pela API ainda não existe.
-- **Garantia 1 (regra de cobrança, nível Service):** solicitação válida de área paga disponível ou autorização de visitante retorna `REQUIRES_CONFIRMATION` sem gravar. Para essas ações, a gravação ocorre em `create_confirmed_reservation` / `create_confirmed_authorization`, operações destinadas à aplicação confiável (não há parâmetro `confirmed`). Elas não validam prova de aprovação: essa responsabilidade será da integração futura. Área gratuita grava diretamente em `request_reservation`. **Tool Confirmation do ADK, `confirmation_id` e rota de confirmações NÃO foram implementados**; a garantia ponta a ponta continua pendente.
+- **Garantia 1 (regra de cobrança, nível Service):** solicitação válida de área paga disponível ou autorização de visitante retorna `REQUIRES_CONFIRMATION` sem gravar. Para essas ações, a gravação ocorre em `create_confirmed_reservation` / `create_confirmed_authorization`, operações destinadas à aplicação confiável (não há parâmetro `confirmed`). Elas não validam prova de aprovação: essa responsabilidade será da integração futura. Área gratuita grava diretamente em `request_reservation`. **Naquele marco (Passo 3)** não havia Tool Confirmation nem `confirmation_id`; ambos foram adicionados nos Passos 7–8. A rota HTTP segue pendente.
 - **Garantia 5 (concorrência):** conflito de área/data vira `AreaUnavailableError`; teste concorrente termina com exatamente uma reserva ATIVA. A proteção final é o índice do banco.
 - **Integridade de reserva:** cancelar muda `status` para `CANCELADA` sem apagar; códigos são gerados pelo sistema (`RSV-` + 8 hex) e a PK permanente impede reutilizar código cancelado.
 
@@ -430,3 +450,9 @@ entre contenção SQLite (inclusive códigos estendidos) e outros erros operacio
 A suíte completa passou: **95 aprovados, zero falhas**. Execução pelo Python da
 `.venv`, com `-B -m pytest -q -p no:cacheprovider`, sem Gemini, em bancos temporários.
 Isso não comprova integração HTTP, Agent ou Tool Confirmation.
+
+## Revisão de 13/10/2026 — Passos 6–9
+
+- Eventos: `get_events` exporta o conteúdo integral e mantém correspondência de um item por evento persistido. `get_event_views` é apenas diagnóstico. `test_get_events_preserves_all_parts_and_metadata` cobre conteúdo misto e state_delta; o teste de ouro compara os JSONs completos antes/depois de processos separados.
+- Regulamento: o teto de 3000 caracteres vale também para o primeiro candidato. Unidade indivisível maior é descartada; sem trecho elegível, `not_found`. `test_oversized_atomic_paragraph_never_exceeds_budget` cobre ausência de resultado e seleção de artigo menor sem truncamento.
+- Gemini: a integração exige consulta da tool, ausência de trechos para `not_found`/`query_too_broad` e rejeita indicadores de regra inventada mesmo após “não encontrei”. A checagem textual é conservadora e não prova ausência universal de alucinação. `tests/test_regulation_assertions.py` valida a regressão offline; só execução com configuração válida valida Gemini.

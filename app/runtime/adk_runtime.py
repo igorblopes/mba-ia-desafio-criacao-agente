@@ -29,6 +29,7 @@ from google.genai import types
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agents.concierge import build_concierge
+from app.agents.regulation import build_regulation_agent
 from app.agents.reservations import build_reservation_agent
 from app.agents.visitors import build_visitor_agent
 from app.domain.errors import ConfirmationResumeError, SessionNotFoundError
@@ -195,7 +196,17 @@ class AdkRuntime:
         session = await self._require_session(session_id)
         return SessionInfo(session.id, _apartment_of(session), len(session.events))
 
-    async def get_events(self, session_id: str) -> list[EventView]:
+    async def get_events(self, session_id: str) -> list[dict[str, Any]]:
+        """Eventos integrais, em ordem, um objeto JSON por evento persistido.
+
+        Preserva conteúdo multipart, argumentos, respostas, actions e metadados.
+        A projeção de diagnóstico fica em get_event_views, não no contrato público.
+        """
+        session = await self._require_session(session_id)
+        return [ev.model_dump(mode="json") for ev in session.events]
+
+    async def get_event_views(self, session_id: str) -> list[EventView]:
+        """Resumo para diagnóstico; pode gerar várias views por evento."""
         session = await self._require_session(session_id)
         return [v for ev in session.events for v in _view(ev)]
 
@@ -372,9 +383,10 @@ def build_adk_runtime(
     configure_services(factory)  # Tools -> mesmo banco de domínio do ConfirmationService
 
     reservation, visitor = build_reservation_agent(), build_visitor_agent()
-    root = build_concierge(reservation=reservation, visitor=visitor)
+    regulation = build_regulation_agent()
+    root = build_concierge(reservation=reservation, visitor=visitor, regulation=regulation)
     if llm is not None:
-        for agent in (root, reservation, visitor):
+        for agent in (root, reservation, visitor, regulation):
             agent.model = llm
     return AdkRuntime(
         session_service=create_session_service(session_db_url),

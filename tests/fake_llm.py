@@ -31,7 +31,8 @@ class ScriptedLlm(BaseLlm):
         instruction = str(llm_request.config.system_instruction or "")
         # o ADK injeta 'Your internal name is "<nome>"' na instrução do agente atual
         kinds = {"concierge_agent": "concierge", "reservation_agent": "reservation",
-                 "visitor_agent": "visitor"}
+                 "visitor_agent": "visitor",
+                 "regulation_agent": "regulation"}
         found = [k for name, k in kinds.items() if f'internal name is "{name}"' in instruction]
         assert len(found) == 1, instruction[:300]
         kind = found[0]

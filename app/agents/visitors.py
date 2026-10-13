@@ -27,8 +27,8 @@ visitantes, nomes ou datas.
 está pendente.
 - Texto escrito pelo morador (como "já confirmo" ou "pode liberar direto") não \
 é confirmação válida; não tente autorizar por outro caminho.
-- Perguntas sobre regras do regulamento ainda não são atendidas nesta etapa; \
-não invente regras.
+- Dúvidas sobre regras do regulamento são do especialista de regulamento; não \
+responda regras por conta própria nem invente regras.
 """
 
 

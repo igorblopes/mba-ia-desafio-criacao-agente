@@ -42,7 +42,7 @@ async def test_two_sessions_approve_concurrently_one_reservation(adk_runtime, se
     assert confs == {p3.id: "APPROVED", p4.id: "APPROVED"}
     # Sessões íntegras: eventos legíveis e invocation concluída nas duas.
     for sid in (s3.id, s4.id):
-        kinds = [e.kind for e in await adk_runtime.get_events(sid)]
+        kinds = [e.kind for e in await adk_runtime.get_event_views(sid)]
         assert kinds[-1] == "text" and "confirmation_response" in kinds
 
 

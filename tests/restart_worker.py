@@ -59,14 +59,15 @@ async def main(args: argparse.Namespace) -> dict:
             return {
                 "session_id": info.id, "confirmation_id": p.id, "invocation_id": p.invocation_id,
                 "agent_name": p.agent_name, "status": p.status.value,
-                "event_count": result.event_count, "counts": await _counts(factory),
+                "events": await runtime.get_events(info.id), "event_count": result.event_count, "counts": await _counts(factory),
             }
         session = await runtime.get_session(args.session_id)
         if args.phase == "inspect":
             pend = await runtime.list_pending_confirmations(args.session_id)
-            events = await runtime.get_events(args.session_id)
+            events = await runtime.get_event_views(args.session_id)
             return {
                 "apartment": session.apartment, "event_count": session.event_count,
+                "events": await runtime.get_events(args.session_id),
                 "event_kinds": [e.kind for e in events],
                 "pending": [{"id": p.id, "invocation_id": p.invocation_id, "status": p.status.value}
                             for p in pend],
@@ -91,7 +92,7 @@ async def main(args: argparse.Namespace) -> dict:
                 "status": res.status.value, "tool_result": res.tool_result,
                 "invocation_id": res.invocation_id, "agent_name": res.agent_name,
                 "apartment": session.apartment, "tool_context_apartment": seen,
-                "event_count_after": res.event_count,
+                "events": await runtime.get_events(args.session_id), "event_count_after": res.event_count,
                 "event_kinds": [e.kind for e in res.new_events], "counts": await _counts(factory),
             }
         raise SystemExit(f"fase desconhecida: {args.phase}")

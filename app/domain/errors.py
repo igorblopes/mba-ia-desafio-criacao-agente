@@ -52,6 +52,13 @@ class InvalidVisitorNameError(DomainError):
         super().__init__("O nome do visitante não pode ser vazio.")
 
 
+class RegulationUnavailableError(DomainError):
+    """O arquivo do regulamento não pôde ser lido."""
+
+    def __init__(self) -> None:
+        super().__init__("Regulamento indisponível no momento.")
+
+
 class SessionNotFoundError(DomainError):
     def __init__(self) -> None:
         super().__init__("Sessão não encontrada.")

@@ -86,7 +86,7 @@ async def test_reject_resumes_adk_and_creates_nothing(adk_runtime, session_facto
     assert (await _confs(session_factory))[p.id].status == "REJECTED"
     # a negação TAMBÉM foi enviada ao ADK: há novo FunctionResponse e a Tool respondeu
     assert res.event_count > before
-    kinds = [e.kind for e in await adk_runtime.get_events(s.id)]
+    kinds = [e.kind for e in await adk_runtime.get_event_views(s.id)]
     assert "confirmation_response" in kinds
 
 

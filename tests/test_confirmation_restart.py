@@ -60,6 +60,8 @@ def test_golden_paid_reservation_survives_restart(env):
     b = env.run("inspect", "--session-id", a["session_id"])
     assert b["apartment"] == "101"  # state sobreviveu
     assert b["event_count"] == a["event_count"]  # eventos sobreviveram
+    assert b["events"] == a["events"]
+    assert len(b["events"]) == b["event_count"]
     assert "confirmation_request" in b["event_kinds"] and "tool_call" in b["event_kinds"]
     assert [p["id"] for p in b["pending"]] == [a["confirmation_id"]]
     assert b["pending"][0]["invocation_id"] == a["invocation_id"]
@@ -88,6 +90,10 @@ def test_golden_paid_reservation_survives_restart(env):
     e = env.run("inspect", "--session-id", a["session_id"])
     assert e["event_count"] == c["event_count_after"] and e["pending"] == []
     assert "confirmation_response" in e["event_kinds"]
+    assert e["events"] == c["events"]
+    parts = [p for ev in e["events"] for p in (ev.get("content") or {}).get("parts", [])]
+    assert any((p.get("function_call") or {}).get("args", {}).get("area_id") == "salao-de-festas" for p in parts)
+    assert any((p.get("function_response") or {}).get("response", {}).get("status") == "created" for p in parts)
 
 
 def test_rejection_after_restart(env):

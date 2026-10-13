@@ -1,6 +1,6 @@
 # Decisões arquiteturais — Residencial Aurora
 
-> **Status do documento (11/10/2026):** decisões de arquitetura com implementação e evidências dos Passos 2 a 5, incluindo as correções de integridade e contenção. Seis FunctionTools estão implementadas; API, agentes, confirmação ADK e regulamento continuam planejados.
+> **Status do documento (13/10/2026):** decisões de arquitetura com implementação e evidências até o Passo 9. Sete FunctionTools, os quatro agentes, a confirmação persistente (Passo 8) e a consulta seletiva ao regulamento (Passo 9) estão implementados; a API HTTP continua planejada.
 > **Aceita** indica decisão, não comprovação de funcionamento. Resultados e limites dos testes constam em [garantias.md](garantias.md#estado-atual-e-evidências).
 > Nomes de arquivos e módulos seguem a proposta inicial de [`arquitetura.md`](arquitetura.md) e podem evoluir.
 
@@ -18,17 +18,17 @@
 | ADR | Título | Status |
 |---|---|---|
 | [ADR-001](#adr-001--fastapi-como-camada-http) | FastAPI como camada HTTP | Aceita |
-| [ADR-002](#adr-002--arquitetura-multiagente) | Arquitetura multiagente | Aceita (acionamento provisório) |
+| [ADR-002](#adr-002--arquitetura-multiagente) | Arquitetura multiagente | Aceita (validada offline; Gemini pendente) |
 | [ADR-003](#adr-003--três-especialistas-além-do-agente-principal) | Três especialistas além do agente principal | Aceita |
 | [ADR-004](#adr-004--agent--tool--service--repository) | Agent → Tool → Service → Repository | Aceita |
 | [ADR-005](#adr-005--sqlite-como-armazenamento) | SQLite como armazenamento | Aceita |
 | [ADR-006](#adr-006--bancos-separados-para-domínio-e-sessões-do-adk) | Bancos separados para domínio e sessões do ADK | Aceita |
 | [ADR-007](#adr-007--identidade-obtida-exclusivamente-da-sessão) | Identidade obtida exclusivamente da sessão | Aceita |
 | [ADR-008](#adr-008--integridade-concorrente-garantida-pelo-banco) | Integridade concorrente garantida pelo banco | Aceita (índice implementado; contenção traduzida no domínio) |
-| [ADR-009](#adr-009--regulamento-consultado-sob-demanda) | Regulamento consultado sob demanda | Aceita (seleção provisória) |
+| [ADR-009](#adr-009--regulamento-consultado-sob-demanda) | Regulamento consultado sob demanda | Aceita (implementada no Passo 9; busca lexical local) |
 | [ADR-010](#adr-010--isolamento-da-integração-adk-em-adkruntime) | Isolamento da integração ADK em `AdkRuntime` | Aceita |
 | [ADR-011](#adr-011--histórico-de-reservas-canceladas-mantido) | Histórico de reservas canceladas mantido | Aceita |
-| [ADR-012](#adr-012--controle-próprio-de-confirmações-além-do-estado-do-adk) | Controle próprio de confirmações além do estado do ADK | Aceita (integração provisória) |
+| [ADR-012](#adr-012--controle-próprio-de-confirmações-além-do-estado-do-adk) | Controle próprio de confirmações além do estado do ADK | Aceita (implementada; recuperação parcial) |
 | [ADR-013](#adr-013--camada-de-service-erros-de-domínio-e-separação-request--execução-confirmada) | Services e execução confirmada separada | Aceita (contenção tratada; outros erros operacionais propagam) |
 | [ADR-014](#adr-014--reset-apaga-sessões-por-padrão-passo-8) | Reset apaga sessões por padrão | Aceita (revisa parte da ADR-006) |
 
@@ -63,7 +63,7 @@ Usar **FastAPI** como camada HTTP.
 ## ADR-002 — Arquitetura multiagente
 
 ### Status
-Aceita *(o mecanismo de acionamento dos especialistas é **provisório**)*
+Aceita (sub_agents + transferência implementados e validados offline)
 
 ### Contexto
 O assistente cobre três domínios com riscos diferentes (reservas, visitantes, regulamento). Concentrar tudo em um único agente aumentaria o contexto, misturaria instruções e dificultaria isolar o que cada domínio pode fazer.
@@ -84,11 +84,11 @@ Adotar um **agente principal (Concierge)** com especialistas registrados como **
 ### Implementação (Passo 6)
 - `concierge_agent` é o root com `sub_agents=[reservation_agent, visitor_agent]`, sem tools de negócio; cada especialista recebe somente as tools do seu domínio (menor privilégio). O Concierge atua só como orquestrador.
 - O modelo vem de `get_settings().gemini_model` (configuração central); não há nome de modelo nos agentes, e todos usam o mesmo modelo por ora.
-- Regulamento: sem agente funcional e fora do prompt do Concierge.
+- Regulamento: fora do prompt do Concierge; o Regulation Agent foi conectado no Passo 9 (`sub_agents` do Concierge, única Tool `consultar_regulamento`).
 - Evidência: `tests/test_agent_structure.py` e `tests/test_agent_runtime_scripted.py`; a transferência com Gemini real e com Tool Confirmation continua não comprovada.
 
 ### Pontos provisórios
-- A transferência é a escolha inicial, mas sua compatibilidade com Tool Confirmation e sessão persistida ainda precisa ser comprovada no RT-001/RT-002.
+- Compatibilidade com Tool Confirmation, sessão persistida e restart comprovada offline no Passo 8 (RT-001/RT-002); Gemini real permanece pendente.
 - Se a retomada não voltar ao agente que solicitou a confirmação, a topologia poderá mudar; essa revisão deverá ser registrada na ADR, preservando a decisão inicial e a evidência do teste.
 
 ### Alternativas consideradas
@@ -160,7 +160,7 @@ Adotar as camadas **Agent → Tool → Service → Repository → Database** com
 - **Tools são adaptadores finos:** convertem data (`AAAA-MM-DD`), chamam o Service e traduzem o resultado para `dict`; não contêm regra de taxa, autorização, SQL nem concorrência. Obtêm Services por `app/services/provider.py`, sem importar SQLAlchemy ou Repositories.
 - **Identidade vem exclusivamente de `ToolContext.state["apartamento"]`** (`app/tools/context.py`), sem fallback; ausência → `invalid_session`.
 - Tools públicas: `listar_minhas_reservas`, `verificar_disponibilidade`, `solicitar_reserva`, `cancelar_minha_reserva`, `listar_meus_visitantes`, `solicitar_autorizacao_visitante`. `create_confirmed_*` permanecem internos aos Services.
-- Tool Confirmation **não** está ativada; Agents e API ainda não existem. `requires_confirmation` é apenas retorno estruturado, sem persistência de pendência. Os testes usam contexto simulado; não comprovam integração ponta a ponta.
+- Histórico: no Passo 5 os testes usavam contexto simulado. Agents, Tool Confirmation e persistência de pendências foram adicionados nos Passos 6–8. A API continua planejada; a tool de regulamento elevou o total para sete no Passo 9.
 
 ### Alternativas consideradas
 - **Tools acessando o banco diretamente:** menos código, mas mistura regra, persistência e fronteira com o LLM.
@@ -256,7 +256,7 @@ O apartamento é definido **na criação da sessão** e guardado no estado da se
 - `app/tools/context.py` lê apenas `state["apartamento"]`, sem fallback; ausência ou valor sem formato básico retorna `invalid_session` nas tools.
 - A assinatura Python recebe `ToolContext`; os schemas gerados pelo ADK omitem esse argumento. `tests/test_tool_schemas.py` verifica os parâmetros visíveis das seis tools.
 - Services de operações pessoais validam a existência do apartamento. A consulta de disponibilidade apenas exige identidade no estado e retorna booleano; não autentica nem consulta o cadastro do apartamento.
-- A origem confiável do estado continua sendo uma precondição: criação e imutabilidade da identidade pela API, resistência a mensagens maliciosas no fluxo real e inspeção de eventos ainda dependem da integração futura.
+- A origem confiável do estado continua sendo uma precondição: criação e proteção do estado pela API permanecem futuras. O runtime já cria o estado e os testes roteirizados verificam isolamento; Gemini real permanece pendente.
 
 ### Alternativas consideradas
 - **Apartamento como argumento da tool, validado contra o da sessão:** funciona, mas mantém a superfície de erro e convida a esquecer a validação em uma tool nova.
@@ -304,32 +304,35 @@ Garantir a exclusividade **no instante da gravação** com:
 ## ADR-009 — Regulamento consultado sob demanda
 
 ### Status
-Aceita *(estratégia de seleção de trechos é provisória)*
+Aceita *(implementada no Passo 9: consulta local determinística, sem RAG vetorial; qualidade da busca limitada ao léxico do documento)*
 
 ### Contexto
 O regulamento é longo. Colocá-lo nas instruções ou no histórico aumenta o custo de todas as chamadas e polui os eventos da sessão com assuntos irrelevantes. O conteúdo devolvido por tools é gravado nos eventos.
 
 ### Decisão
-O regulamento completo **não** entra no prompt do agente principal, nas instruções permanentes dos agentes nem no histórico. Um **`RegulationService`** (conceitual) lê `dados/regulamento.md` e usa inicialmente a estrutura de títulos/seções e palavras-chave para localizar conteúdo, sem banco vetorial. Ele **retorna somente o trecho necessário**; esse trecho pode aparecer nos eventos. A **própria tool limita** o que devolve.
+O regulamento completo **não** entra no prompt do agente principal, nas instruções dos agentes, no `session.state` nem no histórico. A consulta é **local e determinística**, não um RAG vetorial: `RegulationRepository` lê e parseia `dados/regulamento.md` (um trecho por artigo, estrutura Markdown real) e `RegulationService` normaliza a pergunta, ranqueia por IDF com peso extra para o capítulo e devolve no máximo `MAX_RESULTS` trechos / `MAX_RETURNED_CHARS` caracteres, com os textos originais. Perguntas amplas retornam `query_too_broad`; sem evidência suficiente, `not_found`. A Tool `consultar_regulamento(pergunta)` expõe apenas a pergunta; os limites são constantes de código.
 
 ### Motivos
-- Reduz tokens e custo por mensagem.
-- Evita que assuntos não relacionados fiquem nos eventos.
-- A limitação é feita por código, não por pedir ao modelo para "ignorar" conteúdo.
+- **Arquivo pequeno** (~45 mil caracteres, 96 artigos): não justifica infraestrutura vetorial.
+- **Estrutura Markdown** (capítulos e artigos) já oferece unidades de recuperação naturais e citáveis.
+- **Offline:** funciona sem `GOOGLE_API_KEY` e sem rede; embeddings remotos adicionariam dependência, custo e latência.
+- **Determinismo:** mesma pergunta, mesmo resultado; sem variação entre execuções.
+- **Testabilidade:** parser, ranking, limites e vazamento são testados sem Gemini, com expectativas derivadas do arquivo real.
+- **Baixo acoplamento:** nenhuma tabela, índice externo ou serviço novo; o Repository mantém só cache em memória.
+- Reduz tokens e impede que assuntos não relacionados fiquem nos eventos; a limitação é feita por código, não por pedir ao modelo para "ignorar" conteúdo.
 
 ### Consequências
-- A qualidade da resposta depende da qualidade da seleção do trecho.
-- É preciso decidir o que fazer quando nenhum trecho relevante for encontrado (resposta de "não encontrado" em vez de devolver o documento).
-- Os retornos da tool devem ter tamanho limitado e ser inspecionados nos eventos.
-
-### Pontos provisórios
-- Granularidade final (capítulo, artigo ou parágrafo), critérios de ranqueamento dentro da recuperação por estrutura/palavras-chave e limites de tamanho. A abordagem inicial está definida, mas precisa ser calibrada durante a implementação.
-- Tratamento de perguntas que atravessam mais de um assunto.
+- A qualidade da resposta depende da busca lexical. Sinônimos distantes do texto podem gerar `not_found` (falso negativo seguro). Há poucos sinônimos fixos (barulho→ruído/silêncio, cachorro/gato/pet→animais, hora/funcionamento→horário).
+- Pergunta com duas partes: `termos_nao_localizados` permite ao agente responder só o que existe; se a maior parte dos termos não existir, a resposta é `not_found`.
+- Os retornos têm tamanho limitado e são inspecionados nos testes de eventos. Revisão de 13/10/2026: o teto de 3000 caracteres de conteúdo somado inclui o primeiro trecho. Unidade indivisível maior é descartada sem truncamento; nenhum trecho elegível resulta em `not_found`. Isso preserva o limite mesmo com documentos futuros maiores.
+- Se o documento crescer muito ou o vocabulário dos moradores divergir do texto, revisar a decisão (embeddings locais, por exemplo).
 
 ### Alternativas consideradas
 - **Regulamento completo no prompt do agente principal:** rejeitada — custo e poluição de contexto.
 - **Regulamento completo no prompt do especialista:** rejeitada — as instruções acompanham todas as chamadas daquele agente.
 - **Retornar o arquivo inteiro pela tool:** rejeitada — iria para os eventos da sessão.
+- **RAG vetorial (FAISS/Chroma/embeddings):** rejeitada nesta etapa — complexidade e dependência externas sem necessidade para um arquivo pequeno e estruturado.
+- **Pedir ao Gemini que escolha a parte relevante a partir do documento inteiro:** rejeitada — enviaria o documento ao modelo.
 
 ---
 
@@ -366,6 +369,9 @@ O restante da aplicação **não depende** dos detalhes internos da retomada.
 ### Alternativas consideradas
 - **Chamar o Runner diretamente nas rotas FastAPI:** menos código, mas espalha a dependência do ADK pela aplicação.
 - **Usar apenas as ferramentas de desenvolvimento do ADK:** não atende o contrato HTTP.
+
+### Contrato de eventos (revisão de 13/10/2026)
+`AdkRuntime.get_events` retorna eventos integrais como objetos JSON, um por evento persistido e na mesma ordem, preservando todas as partes e metadados. A projeção anterior permanece em `get_event_views` somente para diagnóstico. A futura rota de eventos deve usar `get_events`. Regressões: `tests/test_runtime_events.py` e comparação do conteúdo completo em subprocessos no teste de restart.
 
 ---
 
@@ -495,6 +501,6 @@ Confirmações passaram a viver em `condominio.db`, enquanto a pendência equiva
 |---|---|
 | Validação da escolha inicial `sub_agents` + transferência e eventual revisão | ADR-002 |
 | Validação do tratamento de contenção na futura integração HTTP | ADR-008 / ADR-013 |
-| Granularidade e método de seleção de trechos do regulamento | ADR-009 |
+| Calibração da busca lexical e qualidade da resposta com Gemini (granularidade e limites já decididos) | ADR-009 |
 | ~~Relação entre `id` de confirmação do backend e identificador do ADK~~ — decidido no Passo 8 (`id` = `function_call_id`) | ADR-012 |
 | Recuperação automática de `PROCESSING` órfão e duas confirmações pendentes na mesma sessão | ADR-012 |

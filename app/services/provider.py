@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.services.regulation_service import RegulationService
 from app.services.reservation_service import ReservationService
 from app.services.visitor_service import VisitorService
 
 _reservation_service: ReservationService | None = None
 _visitor_service: VisitorService | None = None
+_regulation_service: RegulationService | None = None
 
 
 def configure_services(session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -46,3 +48,17 @@ def get_visitor_service() -> VisitorService:
     _ensure()
     assert _visitor_service is not None
     return _visitor_service
+
+
+def get_regulation_service() -> RegulationService:
+    """Service do regulamento: independe do banco; o arquivo é parseado uma vez por processo."""
+    global _regulation_service
+    if _regulation_service is None:
+        _regulation_service = RegulationService()
+    return _regulation_service
+
+
+def configure_regulation_service(service: RegulationService | None) -> None:
+    """Substitui (ou, com ``None``, descarta) o Service do regulamento; usado em testes."""
+    global _regulation_service
+    _regulation_service = service

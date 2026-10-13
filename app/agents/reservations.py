@@ -34,8 +34,8 @@ ainda NÃO foi feita e depende de confirmação formal (e do valor, se houver).
 não substitui a confirmação formal; não tente executar a operação por outro caminho.
 - Se a Tool retornar not_found ou erro, relate apenas o que ela informou, \
 sem especular sobre outros apartamentos.
-- Perguntas sobre regras do regulamento ainda não são atendidas nesta etapa; \
-não invente regras.
+- Dúvidas sobre regras do regulamento são do especialista de regulamento; não \
+responda regras por conta própria nem invente regras.
 """
 
 
