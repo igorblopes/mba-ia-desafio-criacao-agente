@@ -236,3 +236,20 @@ async def test_concurrent_many_single_winner(session_factory):
 async def test_domain_errors_share_base():
     assert issubclass(AreaUnavailableError, DomainError)
     assert issubclass(ReservationNotFoundError, DomainError)
+
+
+@pytest.mark.parametrize("given", ["salao_de_festas", "Salão de festas", " SALAO-DE-FESTAS "])
+async def test_area_id_variants_resolve_to_canonical_id(service, session_factory, given):
+    """Regressão (Passo 12): o Gemini mandou "salao_de_festas" e a reserva paga não foi pedida."""
+    result = await service.request_reservation("101", given, D(2030, 4, 20))
+    assert result.status is RequestStatus.REQUIRES_CONFIRMATION
+    assert result.area_id == "salao-de-festas"
+    view = await service.create_confirmed_reservation("101", given, D(2030, 4, 20))
+    assert view.area_id == "salao-de-festas"
+    assert await service.is_available("salao_de_festas", D(2030, 4, 20)) is False
+
+
+@pytest.mark.parametrize("given", ["salao", "festas", "piscina", "", "-"])
+async def test_area_partial_or_unknown_names_still_not_found(service, given):
+    with pytest.raises(AreaNotFoundError):
+        await service.request_reservation("101", given, D(2030, 4, 20))

@@ -11,7 +11,7 @@ from google.adk.agents import Agent
 from app.agents.regulation import build_regulation_agent, regulation_agent
 from app.agents.reservations import reservation_agent
 from app.agents.visitors import visitor_agent
-from app.config import get_settings
+from app.agents.model import gemini_model
 
 CONCIERGE_AGENT_NAME = "concierge_agent"
 
@@ -48,7 +48,7 @@ def build_concierge(
         regulation = build_regulation_agent()
     return Agent(
         name=CONCIERGE_AGENT_NAME,
-        model=get_settings().gemini_model,
+        model=gemini_model(),
         description=DESCRIPTION,
         instruction=INSTRUCTION,
         sub_agents=[reservation, visitor, regulation],

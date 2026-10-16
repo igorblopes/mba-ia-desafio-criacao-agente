@@ -6,6 +6,7 @@ o restante do projeto importa ``get_settings()`` em vez de usar ``os.getenv()``.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -54,3 +55,17 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def export_genai_environment(settings: Settings | None = None) -> None:
+    """Entrega a credencial do ``.env`` ao ``google-genai``, que só lê ``os.environ``.
+
+    Sem isso, ``uv run uvicorn app.main:app`` com a chave apenas no ``.env`` falha em toda
+    chamada ao Gemini ("No API key was provided"). Variáveis já definidas no ambiente vencem.
+    """
+    settings = settings or get_settings()
+    if settings.google_api_key:
+        os.environ.setdefault("GOOGLE_API_KEY", settings.google_api_key)
+    os.environ.setdefault(
+        "GOOGLE_GENAI_USE_VERTEXAI", "TRUE" if settings.google_genai_use_vertexai else "FALSE"
+    )

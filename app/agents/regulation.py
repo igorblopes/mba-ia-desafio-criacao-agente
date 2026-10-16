@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from google.adk.agents import Agent
 
-from app.config import get_settings
+from app.agents.model import gemini_model
 from app.tools import REGULATION_TOOLS
 
 REGULATION_AGENT_NAME = "regulation_agent"
@@ -44,7 +44,7 @@ especialistas.
 def build_regulation_agent() -> Agent:
     return Agent(
         name=REGULATION_AGENT_NAME,
-        model=get_settings().gemini_model,
+        model=gemini_model(),
         description=DESCRIPTION,
         instruction=INSTRUCTION,
         tools=list(REGULATION_TOOLS),

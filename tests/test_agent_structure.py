@@ -90,14 +90,24 @@ def test_model_comes_from_central_settings(monkeypatch):
     get_settings.cache_clear()
     monkeypatch.setenv("GEMINI_MODEL", "modelo-de-teste")
     try:
-        assert build_reservation_agent().model == "modelo-de-teste"
-        assert build_visitor_agent().model == "modelo-de-teste"
-        assert build_regulation_agent().model == "modelo-de-teste"
+        assert build_reservation_agent().model.model == "modelo-de-teste"
+        assert build_visitor_agent().model.model == "modelo-de-teste"
+        assert build_regulation_agent().model.model == "modelo-de-teste"
         assert build_concierge(
             reservation=build_reservation_agent(), visitor=build_visitor_agent()
-        ).model == "modelo-de-teste"
+        ).model.model == "modelo-de-teste"
     finally:
         get_settings.cache_clear()
+
+
+def test_agents_retry_transient_gemini_failures():
+    """Regressão (Passo 12): 429/503 momentâneos do Gemini viravam HTTP 500 no ensaio real."""
+    for agent in (build_reservation_agent(), build_visitor_agent(), build_regulation_agent(),
+                  build_concierge(reservation=build_reservation_agent(),
+                                  visitor=build_visitor_agent())):
+        retry = agent.model.retry_options
+        assert retry is not None and retry.attempts > 1
+        assert {429, 503} <= set(retry.http_status_codes)
 
 
 def test_no_hardcoded_model_names_in_agent_modules():

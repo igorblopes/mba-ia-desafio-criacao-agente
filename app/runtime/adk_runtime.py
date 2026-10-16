@@ -34,6 +34,7 @@ from app.agents.concierge import build_concierge
 from app.agents.regulation import build_regulation_agent
 from app.agents.reservations import build_reservation_agent
 from app.agents.visitors import build_visitor_agent
+from app.config import export_genai_environment
 from app.domain.errors import AgentRunLimitError, ConfirmationResumeError, SessionNotFoundError
 from app.domain.types import ConfirmationRecord, ConfirmationStatus
 from app.runtime.confirmations import (
@@ -417,6 +418,8 @@ def build_adk_runtime(
     if llm is not None:
         for agent in (root, reservation, visitor, regulation):
             agent.model = llm
+    else:
+        export_genai_environment()  # Gemini real: a chave do .env precisa chegar ao google-genai
     return AdkRuntime(
         session_service=create_session_service(session_db_url),
         confirmation_service=ConfirmationService(factory),

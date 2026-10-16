@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from google.adk.agents import Agent
 
-from app.config import get_settings
+from app.agents.model import gemini_model
 from app.tools import VISITOR_TOOLS
 
 VISITOR_AGENT_NAME = "visitor_agent"
@@ -35,7 +35,7 @@ responda regras por conta própria nem invente regras.
 def build_visitor_agent() -> Agent:
     return Agent(
         name=VISITOR_AGENT_NAME,
-        model=get_settings().gemini_model,
+        model=gemini_model(),
         description=DESCRIPTION,
         instruction=INSTRUCTION,
         tools=list(VISITOR_TOOLS),

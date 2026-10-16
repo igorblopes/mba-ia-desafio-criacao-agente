@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from google.adk.agents import Agent
 
-from app.config import get_settings
+from app.agents.model import gemini_model
 from app.tools import RESERVATION_TOOLS
 
 RESERVATION_AGENT_NAME = "reservation_agent"
@@ -42,7 +42,7 @@ responda regras por conta própria nem invente regras.
 def build_reservation_agent() -> Agent:
     return Agent(
         name=RESERVATION_AGENT_NAME,
-        model=get_settings().gemini_model,
+        model=gemini_model(),
         description=DESCRIPTION,
         instruction=INSTRUCTION,
         tools=list(RESERVATION_TOOLS),
