@@ -147,7 +147,7 @@ A exclusividade "uma reserva ATIVA por área e data" é imposta pelo SQLite no m
 
 ## Garantias (Guarantees)
 
-Os testes citados rodam com `uv run pytest`, sem chave. Usam ADK, FastAPI e SQLite reais e um LLM roteirizado ou hostil. O ensaio integral com Gemini real está em `tests/e2e/test_evaluator_flow.py`; os checkpoints `CP-xx` estão em [docs/ensaio-avaliador.md](docs/ensaio-avaliador.md), com **RUN 1 = PASS e RUN 2 = PASS**.
+Os testes citados rodam com `uv run pytest`, sem chave. Usam ADK, FastAPI e SQLite reais e um LLM roteirizado ou hostil. O ensaio integral com Gemini real está em `tests/e2e/test_evaluator_flow.py` e reproduz literalmente os 15 passos do avaliador (checkpoints `P01`–`P15`, **RUN 1 = PASS e RUN 2 = PASS**, 38/38 cada). Os checkpoints `CP-xx` citados abaixo são da versão anterior do ensaio, com mensagens parafraseadas (**RUN 1 = PASS e RUN 2 = PASS**); os detalhes estão em [docs/ensaio-avaliador.md](docs/ensaio-avaliador.md).
 
 ### 1. Confirmação formal (cobrança ou acesso)
 

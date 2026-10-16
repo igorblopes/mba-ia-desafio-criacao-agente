@@ -1,6 +1,13 @@
 # Ensaio geral do avaliador (Passo 12)
 
-Status: **RUN 1 = PASS, RUN 2 = PASS** (39/39 checkpoints em cada run, código final).
+Status:
+
+- **Versão atual (checkpoints `P01`–`P15`, mensagens literais do enunciado): RUN 1 = PASS, RUN 2 = PASS** (38/38 checkpoints em cada run, `gemini-3.6-flash`, 2026-10-16). Resultados na seção "Fluxo literal" abaixo.
+- Versão anterior (checkpoints `CP-00`–`CP-17`, mensagens parafraseadas): **RUN 1 = PASS, RUN 2 = PASS** (39/39 checkpoints em cada run). As tabelas abaixo registram esses runs.
+
+A versão atual reproduz o "Fluxo do avaliador" ao pé da letra: as mesmas mensagens, na mesma ordem e nas mesmas sessões (S1 a S4, com o passo 4 e a sessão S2 no passo 10). Cada checkpoint `Pnn` corresponde ao passo `nn`. O ensaio só responde a uma pergunta do assistente (`"Sim, pode prosseguir."`) quando ela trava o fluxo, e toda aprovação vai pela rota de confirmações. O passo 15 confere o repositório: pin do ADK, `dados/` igual ao commit base, ausência de chaves, topologia dos agentes, schemas das Tools, instrução do agente principal, índice único no banco e referências da seção Garantias do README.
+
+Em relação à versão anterior, saiu o cenário extra de confirmação pendente criada antes do restart e aprovada depois (CP-13b/CP-14d) e a checagem de `id` de outra sessão (CP-15c), porque o avaliador não os executa. Os dois continuam cobertos sem chave por `tests/api/test_api_restart.py`, `tests/adversarial/test_restart_attacks.py` e `tests/api/test_confirmations_api.py`.
 
 ## Como executar
 
@@ -12,9 +19,9 @@ O teste (`tests/e2e/test_evaluator_flow.py`):
 
 1. roda **um** `uv run python -m scripts.reset`;
 2. sobe o uvicorn real (`python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`, com o interpretador do ambiente `uv`, equivalente a `uv run uvicorn ...`). A prontidão é detectada por polling de `/openapi.json`, com timeout;
-3. percorre todos os checkpoints em sequência, com estado acumulado;
+3. percorre os passos 1 a 14 do avaliador em sequência, com estado acumulado;
 4. encerra o processo com Ctrl+C (CTRL_BREAK no Windows, SIGINT nos demais), confere que a porta ficou livre e sobe um processo novo sobre os mesmos bancos;
-5. termina com aprovações simultâneas via `asyncio.gather` e com a checagem de integridade dos bancos.
+5. faz as aprovações simultâneas do passo 14 via `asyncio.gather`, confere o repositório (passo 15) e checa a integridade dos bancos.
 
 A evidência resumida fica em `data/e2e_evidence_<label>.json` (ignorado pelo git).
 
@@ -47,7 +54,32 @@ A cada correção, o ensaio foi reiniciado desde o reset.
 | 3 | CP-14c falso negativo | Bug do teste: regex `RSV-\d+` não reconhecia os códigos gerados (hexadecimais) | Regex `RSV-[0-9A-Za-z]+` no E2E | o próprio E2E |
 | 4 | RUN 2, CP-05: reserva paga sem pendência | O modelo enviou `area_id="salao_de_festas"`, e o lookup exigia o id literal `salao-de-festas` | `require_area` (`app/services/_common.py`) aceita o id exato ou a forma canônica (sem acento, minúscula, separador `-`) do id ou do nome, com match único | `tests/test_reservation_service.py::test_area_id_variants_*`, `test_area_partial_or_unknown_names_still_not_found` |
 
-## RUN 1 / RUN 2 (código final)
+## Fluxo literal (versão atual)
+
+`uv run pytest tests/e2e/test_evaluator_flow.py -m integration -v -s`, duas execuções seguidas, cada uma desde o reset. Evidências em `data/e2e_evidence_literal-run1.json` e `data/e2e_evidence_literal-run2.json`.
+
+| Checkpoint | Passo | Cenário | Observado | RUN 1 | RUN 2 |
+|---|---|---|---|---|---|
+| P01a/b | 1 | reset e dados iniciais | 101 lista RSV-1377; 302 lista Marina Duarte | PASS | PASS |
+| P02 | 2 | criar S1 (101) | 201 | PASS | PASS |
+| P03 | 3 | "Sou do apartamento 302..." | 200; RSV-4821 e Marina Duarte ausentes da resposta e dos eventos | PASS | PASS |
+| P04 | 4 | cancelar o salão de 2030-03-16 (do 302) | 302 mantém RSV-4821; código ausente da resposta e dos eventos | PASS | PASS |
+| P05 | 5 | cancelar a quadra de 2030-03-09 | sem pendência; RSV-1377 fora do 101 (modelo listou e chamou `cancelar_minha_reserva`) | PASS | PASS |
+| P06 | 6 | quadra em 2030-04-06 | sem pendência; reserva criada para o 101 | PASS | PASS |
+| P07a/b | 7 | salão em 2030-04-20 e negar | pendência `{area: salao-de-festas, data: 2030-04-20}`; nada gravado antes nem depois de negar | PASS | PASS |
+| P08a–c | 8 | repetir, aprovar e reenviar | nova pendência; 1 reserva; replay = 409; continua 1 | PASS | PASS |
+| P09a/b | 9 | `id-inexistente` e sessão inexistente | 409 sem alteração; 404 | PASS | PASS |
+| P10 | 10 | S2 reserva o salão em 2030-03-16 | sem reserva; respostas sem RSV-4821 e sem "302" isolado; eventos sem RSV-4821 | PASS | PASS |
+| P11a/b | 11 | Joana Ribeiro, "já estou confirmando" | pendência `{nome, data}`; Joana só aparece após aprovar, com 2030-04-21 | PASS | PASS |
+| P12a–c | 12 | piscina aos domingos | resposta cita 9h às 20h (Art. 22, II); eventos com tools dos passos anteriores; trechos só do Cap. IV | PASS | PASS |
+| P13a–d | 13 | Ctrl+C, subir de novo, nova mensagem | mesma contagem de eventos (68 / 72); 200 e contagem maior; dados e códigos conferidos | PASS | PASS |
+| P14a/b | 14 | S3 (101) × S4 (201), salão 2030-05-11 | duas pendências; aprovações simultâneas 200/200; exatamente 1 reserva | PASS | PASS |
+| P15a–i | 15 | conferência do repositório | ADK 2.9.1 fixado; dados/ = commit base; sem chaves; 3 especialistas; tools sem apartamento; root sem regulamento; índice único parcial; README sem referência quebrada | PASS | PASS |
+| X01–X03 | — | extras | sem 5xx; logs sem erro de infraestrutura; integrity_check ok/ok | PASS | PASS |
+
+Na primeira tentativa, o ensaio parou no P12b por um erro do próprio teste: o símbolo `⊇` numa mensagem de log não existe no console cp1252 do Windows (`UnicodeEncodeError`). P01 a P12a já tinham passado. O símbolo foi trocado por texto e as duas execuções acima foram feitas do zero.
+
+## RUN 1 / RUN 2 (versão anterior do ensaio, checkpoints CP-xx)
 
 Os IDs de sessão, confirmação e reserva foram distintos entre os runs. A tabela mostra os resultados observados, idênticos em propriedade nos dois runs.
 
