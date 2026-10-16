@@ -1,6 +1,6 @@
 # Decisões arquiteturais — Residencial Aurora
 
-> **Status do documento (13/10/2026):** decisões de arquitetura com implementação e evidências até o Passo 9. Sete FunctionTools, os quatro agentes, a confirmação persistente (Passo 8) e a consulta seletiva ao regulamento (Passo 9) estão implementados; a API HTTP continua planejada.
+> **Status do documento (16/10/2026):** decisões de arquitetura com implementação dos Passos 10–11 e validação offline; Gemini pendente. Sete FunctionTools, os quatro agentes, a confirmação persistente (Passo 8) e a consulta seletiva ao regulamento (Passo 9) estão implementados; a API HTTP está implementada no Passo 10.
 > **Aceita** indica decisão, não comprovação de funcionamento. Resultados e limites dos testes constam em [garantias.md](garantias.md#estado-atual-e-evidências).
 > Nomes de arquivos e módulos seguem a proposta inicial de [`arquitetura.md`](arquitetura.md) e podem evoluir.
 
@@ -31,6 +31,9 @@
 | [ADR-012](#adr-012--controle-próprio-de-confirmações-além-do-estado-do-adk) | Controle próprio de confirmações além do estado do ADK | Aceita (implementada; recuperação parcial) |
 | [ADR-013](#adr-013--camada-de-service-erros-de-domínio-e-separação-request--execução-confirmada) | Services e execução confirmada separada | Aceita (contenção tratada; outros erros operacionais propagam) |
 | [ADR-014](#adr-014--reset-apaga-sessões-por-padrão-passo-8) | Reset apaga sessões por padrão | Aceita (revisa parte da ADR-006) |
+| [ADR-015](#adr-015--recuperação-de-pendências-também-no-contrato-http-16102026) | Reconciliação no fluxo HTTP | Aceita |
+| [ADR-016](#adr-016--limites-de-execução-e-erros-http-seguros-passo-11) | Limites e erros HTTP seguros | Aceita |
+| [ADR-017](#adr-017--reinício-normal-distinto-de-crash-nos-testes-16102026) | Shutdown, crash e ordem dos eventos | Aceita |
 
 ---
 
@@ -160,7 +163,7 @@ Adotar as camadas **Agent → Tool → Service → Repository → Database** com
 - **Tools são adaptadores finos:** convertem data (`AAAA-MM-DD`), chamam o Service e traduzem o resultado para `dict`; não contêm regra de taxa, autorização, SQL nem concorrência. Obtêm Services por `app/services/provider.py`, sem importar SQLAlchemy ou Repositories.
 - **Identidade vem exclusivamente de `ToolContext.state["apartamento"]`** (`app/tools/context.py`), sem fallback; ausência → `invalid_session`.
 - Tools públicas: `listar_minhas_reservas`, `verificar_disponibilidade`, `solicitar_reserva`, `cancelar_minha_reserva`, `listar_meus_visitantes`, `solicitar_autorizacao_visitante`. `create_confirmed_*` permanecem internos aos Services.
-- Histórico: no Passo 5 os testes usavam contexto simulado. Agents, Tool Confirmation e persistência de pendências foram adicionados nos Passos 6–8. A API continua planejada; a tool de regulamento elevou o total para sete no Passo 9.
+- Histórico: no Passo 5 os testes usavam contexto simulado. Agents, Tool Confirmation e persistência de pendências foram adicionados nos Passos 6–8. A API está implementada desde o Passo 10; a tool de regulamento elevou o total para sete no Passo 9.
 
 ### Alternativas consideradas
 - **Tools acessando o banco diretamente:** menos código, mas mistura regra, persistência e fronteira com o LLM.
@@ -256,7 +259,7 @@ O apartamento é definido **na criação da sessão** e guardado no estado da se
 - `app/tools/context.py` lê apenas `state["apartamento"]`, sem fallback; ausência ou valor sem formato básico retorna `invalid_session` nas tools.
 - A assinatura Python recebe `ToolContext`; os schemas gerados pelo ADK omitem esse argumento. `tests/test_tool_schemas.py` verifica os parâmetros visíveis das seis tools.
 - Services de operações pessoais validam a existência do apartamento. A consulta de disponibilidade apenas exige identidade no estado e retorna booleano; não autentica nem consulta o cadastro do apartamento.
-- A origem confiável do estado continua sendo uma precondição: criação e proteção do estado pela API permanecem futuras. O runtime já cria o estado e os testes roteirizados verificam isolamento; Gemini real permanece pendente.
+- A origem confiável do estado continua sendo uma precondição: a API valida o apartamento antes de criar a sessão e não expõe alteração da identidade. O runtime já cria o estado e os testes roteirizados verificam isolamento; Gemini real permanece pendente.
 
 ### Alternativas consideradas
 - **Apartamento como argumento da tool, validado contra o da sessão:** funciona, mas mantém a superfície de erro e convida a esquecer a validação em uma tool nova.
@@ -371,7 +374,7 @@ O restante da aplicação **não depende** dos detalhes internos da retomada.
 - **Usar apenas as ferramentas de desenvolvimento do ADK:** não atende o contrato HTTP.
 
 ### Contrato de eventos (revisão de 13/10/2026)
-`AdkRuntime.get_events` retorna eventos integrais como objetos JSON, um por evento persistido e na mesma ordem, preservando todas as partes e metadados. A projeção anterior permanece em `get_event_views` somente para diagnóstico. A futura rota de eventos deve usar `get_events`. Regressões: `tests/test_runtime_events.py` e comparação do conteúdo completo em subprocessos no teste de restart.
+`AdkRuntime.get_events` retorna eventos integrais como objetos JSON, um por evento persistido e na mesma ordem, preservando todas as partes e metadados. A projeção anterior permanece em `get_event_views` somente para diagnóstico. A rota de eventos usa `get_events`. Regressões: `tests/test_runtime_events.py` e comparação do conteúdo completo em subprocessos no teste de restart.
 
 ---
 
@@ -450,7 +453,7 @@ Estados: `PENDING`, `PROCESSING`, `APPROVED`, `REJECTED`. Regras:
 
 ### Pontos ainda provisórios
 - Reconciliação automática de `PROCESSING` órfão.
-- Duas confirmações pendentes na mesma sessão (não testado).
+- Duas confirmações na mesma sessão e respostas fora de ordem têm cobertura offline em `tests/adversarial/test_confirmation_attacks.py`; Gemini continua pendente.
 
 ### Alternativas consideradas
 - **Depender apenas do estado de confirmação do ADK:** rejeitada — não cobre `409`, idempotência nem o risco de retomada silenciosa.
@@ -500,7 +503,50 @@ Confirmações passaram a viver em `condominio.db`, enquanto a pendência equiva
 | Tema | Onde |
 |---|---|
 | Validação da escolha inicial `sub_agents` + transferência e eventual revisão | ADR-002 |
-| Validação do tratamento de contenção na futura integração HTTP | ADR-008 / ADR-013 |
+| Revalidar contenção HTTP com Gemini (cobertura roteirizada existente) | ADR-008 / ADR-013 |
 | Calibração da busca lexical e qualidade da resposta com Gemini (granularidade e limites já decididos) | ADR-009 |
 | ~~Relação entre `id` de confirmação do backend e identificador do ADK~~ — decidido no Passo 8 (`id` = `function_call_id`) | ADR-012 |
-| Recuperação automática de `PROCESSING` órfão e duas confirmações pendentes na mesma sessão | ADR-012 |
+| Recuperação automática de `PROCESSING` órfão | ADR-012 |
+
+
+## ADR-015 — Recuperação de pendências também no contrato HTTP (16/10/2026)
+
+**Status:** aceita e implementada.
+
+Uma queda pode deixar o pedido de confirmação nos eventos ADK antes do commit no banco de domínio.
+`AdkRuntime.list_pending_confirmations` reconcilia apenas chamadas sem resposta formal; o insert
+idempotente preserva estados existentes. `send_message` usa essa operação para compor a lista pública;
+`resume_confirmation` a chama antes do claim. IDs arbitrários ou de outra sessão continuam dando 409.
+Isso não reconcilia `PROCESSING` órfão nem torna atômicos os dois bancos.
+
+Alternativa rejeitada: exigir que o cliente invoque um método interno ou aprove outra confirmação
+para disparar a recuperação. Regressão HTTP entre processos: `test_http_recovers_confirmation_missing_from_domain_after_restart`.
+
+## ADR-016 — Limites de execução e erros HTTP seguros (Passo 11)
+
+**Status:** aceita e implementada.
+
+- `RunConfig(max_llm_calls=25)` limita laços do modelo. Em `/mensagens`, `AgentRunLimitError` vira 502;
+  na retomada aplica-se `ConfirmationResumeError` (503 se liberada, 500 se ambígua).
+- A validação devolve 422 com tipo, localização e mensagem, sem refletir o input. Isso evita que
+  números não finitos quebrem a serialização JSON da resposta de erro.
+- Confirmação exige booleano estrito. IDs não pendentes da sessão dão 409; sessão ausente dá 404.
+- O limite de 25 requer calibração com Gemini; não é prova de qualidade dos fluxos reais.
+
+Regressões: `tests/adversarial/test_regressions.py`. Alternativas rejeitadas: teto padrão de 500
+chamadas e eco integral do corpo inválido.
+
+## ADR-017 — Reinício normal distinto de crash nos testes (16/10/2026)
+
+**Status:** aceita e implementada na infraestrutura de teste.
+
+`tests.uvicorn_worker` executa o servidor real em subprocesso e aceita desligamento por stdin.
+O servidor executa o lifespan de shutdown antes da leitura SQLite seguinte. Timeout causa falha
+explícita e limpeza do processo; não há retry para esconder erro de disco. O ataque de crash usa
+`os._exit(86)` separadamente. O cenário live usa `app.main:app` em dois processos sequenciais.
+Eventos artificiais usam timestamps explícitos; empate é verificado por ID conforme ADK 2.9.1.
+Não se presume ordem de inserção para timestamps iguais.
+
+A fixture adversarial `world` é registrada em `tests/conftest.py`, no pai comum às seleções
+mistas de arquivos. Continua com escopo por teste; sua lógica e os bancos temporários são
+os mesmos. Isso evita falhas de descoberta da fixture ao intercalar diretórios na seleção.

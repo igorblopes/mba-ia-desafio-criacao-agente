@@ -42,8 +42,8 @@ class Server:
         self.log_path = log
         self._log = log.open("ab")
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", app, "--host", "127.0.0.1", "--port", str(self.port)],
-            cwd=ROOT, env=env, stdout=self._log, stderr=subprocess.STDOUT)
+            [sys.executable, "-m", "tests.uvicorn_worker", app, str(self.port)],
+            cwd=ROOT, env=env, stdin=subprocess.PIPE, stdout=self._log, stderr=subprocess.STDOUT)
 
     def wait_ready(self, timeout: float = 90) -> "Server":
         deadline = time.monotonic() + timeout
@@ -58,14 +58,24 @@ class Server:
         raise TimeoutError("servidor não ficou pronto")
 
     def stop(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait()
-        self._log.close()
+        try:
+            if self.proc.poll() is None:
+                try:
+                    self.proc.stdin.write(b"stop\n")
+                    self.proc.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    if self.proc.poll() is None:
+                        raise
+                try:
+                    self.proc.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+                    self.proc.wait()
+                    raise AssertionError("uvicorn não encerrou cooperativamente")
+        finally:
+            if self.proc.stdin:
+                self.proc.stdin.close()
+            self._log.close()
 
     def wait_exit(self, timeout: float = 30) -> int:
         self.proc.wait(timeout=timeout)

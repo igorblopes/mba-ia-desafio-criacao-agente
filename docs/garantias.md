@@ -1,22 +1,26 @@
 # Garantias arquiteturais — Residencial Aurora
 
-> **Status do documento (13/10/2026):** requisitos da arquitetura alvo e evidências dos Passos 2 a 9, incluindo regressões de integridade e contenção. As estratégias descrevem o comportamento exigido do sistema completo; não constituem declaração de implementação ponta a ponta.
-> Persistência, Services, sete FunctionTools e a topologia multiagente existem. **Tool Confirmation do ADK (Passo 7) e confirmação persistente, idempotente e retomável após restart (Passo 8) estão implementadas e testadas com LLM roteirizado (sem Gemini real)**; a **consulta seletiva do regulamento (Passo 9) está implementada e testada offline**; a **API HTTP (Passo 10) está implementada e testada com LLM roteirizado**, incluindo o `409`. Gemini real e a rodada adversarial continuam pendentes. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
+> **Status do documento (16/10/2026):** requisitos e evidências dos Passos 2 a 11, incluindo regressões de integridade e contenção. As estratégias descrevem o comportamento exigido do sistema completo; não constituem declaração de implementação ponta a ponta.
+> Persistência, Services, sete FunctionTools e a topologia multiagente existem. **Tool Confirmation do ADK (Passo 7) e confirmação persistente, idempotente e retomável após restart (Passo 8) estão implementadas e testadas com LLM roteirizado (sem Gemini real)**; a **consulta seletiva do regulamento (Passo 9) está implementada e testada offline**; a **API HTTP (Passo 10) está implementada e testada com LLM roteirizado**, incluindo o `409`. A rodada adversarial offline existe; Gemini real continua pendente. Resultados atuais em `testes-adversariais.md`. Pseudocódigo é conceitual. Consulte as evidências e pendências ao final.
 
 ## Estado atual e evidências
+
+A tabela distingue o escopo histórico de cada passo; as validações dos Passos 10–11 complementam os limites dos anteriores.
 
 | Escopo | Implementação e evidência | Limite |
 |---|---|---|
 | Passo 2 | Modelos, repositories, reset e fábrica `DatabaseSessionService`; verificações históricas descritas ao final | Persistência mínima não comprova continuidade de conversa ou confirmação |
 | Passo 3 | 31 testes de Services | Operações `create_confirmed_*` exigem chamador confiável; não validam aprovação externa |
-| Passo 4 | 15 testes de concorrência | Exclusividade comprovada no domínio; confirmações concorrentes também cobertas no Passo 8; HTTP pendente |
+| Passo 4 | 15 testes de concorrência | Exclusividade comprovada no domínio; confirmações concorrentes também cobertas no Passo 8; HTTP coberto no Passo 10 |
 | Passo 5 | 31 testes de tools e schemas | Contexto simulado; duas chamadas também passam por `FunctionTool.run_async`; sem Agent/Runner |
 | Passo 7 | Tool Confirmation real (`request_confirmation`), parser de eventos, resposta formal, Runner real com LLM roteirizado | Sessão InMemory; Gemini real só com chave; sem `DatabaseSessionService`, restart, tabela de confirmações, API ou 409 |
-| Passo 8 | `AdkRuntime` (`create_session`, `send_message`, `get_events`, `resume_confirmation`), `DatabaseSessionService` + resumability, tabela `confirmacoes` (`PENDING/PROCESSING/APPROVED/REJECTED`), claim atômico; restart real em **processos Python separados** (`tests/test_confirmation_restart.py`) | LLM roteirizado; Gemini real só com chave (testes `integration` pulados sem ela); sem API HTTP; `PROCESSING` órfão após queda em plena retomada não é reconciliado automaticamente |
+| Passo 8 | `AdkRuntime` (`create_session`, `send_message`, `get_events`, `resume_confirmation`), `DatabaseSessionService` + resumability, tabela `confirmacoes` (`PENDING/PROCESSING/APPROVED/REJECTED`), claim atômico; restart real em **processos Python separados** (`tests/test_confirmation_restart.py`) | LLM roteirizado; Gemini real só com chave (testes `integration` pulados sem ela); HTTP acrescentado no Passo 10; `PROCESSING` órfão após queda em plena retomada não é reconciliado automaticamente |
 | Passo 9 | `RegulationRepository` (parser Markdown, 96 artigos em 14 capítulos), `RegulationService` (ranking determinístico, `MAX_RESULTS=3`, `MAX_RETURNED_CHARS=3000`, `query_too_broad`, `not_found`), Tool `consultar_regulamento(pergunta)`, Regulation Agent, testes offline de parser, busca, tool, eventos e limites (`test_regulation_*`) | LLM roteirizado nos testes de eventos; Gemini real só com chave (`tests/integration/test_regulation_agent.py`, pulado sem ela); busca lexical |
+| Passo 10 | Seis rotas FastAPI, contrato, sessões/eventos persistentes e restart uvicorn em `tests/api/` | Modelo roteirizado; Gemini pendente |
+| Passo 11 | Ataques HTTP, modelo hostil, replay, múltiplas pendências, concorrência e crash em `tests/adversarial/` | Resultados por execução em `testes-adversariais.md`; live pendente |
 | Correções | 18 regressões de integridade e contenção | Locks reais nas escritas; códigos estendidos e tradução nas seis tools também exercitados por injeção de erro |
 
-Validação anterior à correção (13/10/2026, Windows): 242 testes offline passaram; 24 integrações foram puladas por falta de GOOGLE_API_KEY e/ou GEMINI_MODEL. A revisão acrescenta regressões para eventos completos, limite de retorno e detecção de respostas inventadas. Resultado final desta revisão: **251 testes offline aprovados**, 24 deselecionados (`uv run --frozen pytest -q`, Windows, 13/10/2026). Execução separada `uv run --frozen pytest -m integration -q -rs`: **24 pulados**, 251 deselecionados, por falta de GOOGLE_API_KEY e/ou GEMINI_MODEL. Não houve validação de Gemini real. Testes usam bancos temporários; os bancos locais não são restaurados.
+**Registro histórico da revisão dos Passos 6–9 (13/10/2026, Windows):** 242 testes offline passaram; 24 integrações foram puladas por falta de GOOGLE_API_KEY e/ou GEMINI_MODEL. A revisão acrescenta regressões para eventos completos, limite de retorno e detecção de respostas inventadas. Resultado final daquela revisão: **251 testes offline aprovados**, 24 deselecionados (`uv run --frozen pytest -q`, Windows, 13/10/2026). Execução separada `uv run --frozen pytest -m integration -q -rs`: **24 pulados**, 251 deselecionados, por falta de GOOGLE_API_KEY e/ou GEMINI_MODEL. Não houve validação de Gemini real. Testes usam bancos temporários; os bancos locais não são restaurados.
 
 Os 31 testes e comandos citados na seção histórica dos Passos 2 e 3 não são o
 inventário da suíte atual.
@@ -84,7 +88,7 @@ Ações que não geram cobrança nem liberam acesso (reserva de área sem taxa, 
 
 ### Componentes e estado de implementação
 
-> **Estado atual:** a regra de taxa e a separação request/execução estão nos services, e as Tools usam `tool_context.request_confirmation` / `tool_context.tool_confirmation` (Passo 7, validado em sessão InMemory). O Passo 8 adicionou tabela de confirmações, claim atômico e retomada persistente. Apenas a camada HTTP permanece planejada.
+> **Estado atual:** a regra de taxa e a separação request/execução estão nos services, e as Tools usam `tool_context.request_confirmation` / `tool_context.tool_confirmation` (Passo 7, validado em sessão InMemory). O Passo 8 adicionou tabela de confirmações, claim atômico e retomada persistente. A camada HTTP está implementada desde o Passo 10.
 
 **Evidências do Passo 7 (ADK 2.9.1, sessão `InMemorySessionService`):**
 
@@ -95,8 +99,8 @@ Ações que não geram cobrança nem liberam acesso (reserva de área sem taxa, 
 - `id`, `invocation_id` (`event.invocation_id`) e `agent_name` (`event.author`: `reservation_agent` / `visitor_agent`) são extraídos por `app/runtime/confirmations.py`; a retomada ocorreu no agente especialista correto mesmo com o Concierge como root.
 - Testes: `tests/test_confirmation_events.py` (parser offline), `tests/test_tool_confirmation_scripted.py` (Runner real + LLM roteirizado) e `tests/integration/test_tool_confirmation.py` (Gemini real; `skip` sem `GOOGLE_API_KEY`).
 - **Limitação registrada:** o `payload` do `request_confirmation` não volta na resposta do cliente (`tool_confirmation.payload` é `None` na retomada). A taxa usada na retomada é lida novamente do banco; a conferência entre taxa mostrada e taxa aprovada precisará usar o registro persistido do Passo 8.
-- **Descobertas (não são a garantia final):** (a) enviar a mesma resposta duas vezes **re-executa a Tool**: a reserva é contida só pelo índice único do banco (`unavailable`), mas a autorização de visitante **foi duplicada** (2 registros); (b) `id` inexistente levanta `ValueError: Function call not found for function response ids` dentro do ADK. A regra "reenvio ou id inexistente → 409" continua pendente para o Passo 8/API.
-- **NÃO validado neste passo:** `DatabaseSessionService` + SQLite, reinício do processo, persistência de confirmações (`PENDING`/`APPROVED`/`REJECTED`), rota `/confirmacoes` e HTTP 409. *(Os três primeiros foram tratados no Passo 8, abaixo; a rota e o 409 seguem pendentes.)*
+- **Descobertas (não são a garantia final):** (a) enviar a mesma resposta duas vezes **re-executa a Tool**: a reserva é contida só pelo índice único do banco (`unavailable`), mas a autorização de visitante **foi duplicada** (2 registros); (b) `id` inexistente levanta `ValueError: Function call not found for function response ids` dentro do ADK. Essa falha do ADK isolado foi contida pelo runtime e pela API nos Passos 8 e 10.
+- **NÃO validado neste passo:** `DatabaseSessionService` + SQLite, reinício do processo, persistência de confirmações (`PENDING`/`APPROVED`/`REJECTED`), rota `/confirmacoes` e HTTP 409. *(Os três primeiros foram tratados no Passo 8, abaixo; a rota e o 409 foram tratados no Passo 10.)*
 
 **Evidências do Passo 8 (ADK 2.9.1, `DatabaseSessionService` em `adk_sessions.db`, resumability ligada):**
 
@@ -110,7 +114,7 @@ Ações que não geram cobrança nem liberam acesso (reserva de área sem taxa, 
 - **Restart real:** `tests/test_confirmation_restart.py` executa cada fase em um **processo Python separado** (`tests/restart_worker.py`: `create` → `inspect` → `resume` → `resume` repetido), reconstruindo engine, `DatabaseSessionService`, `App`, `Runner` e `AdkRuntime`. Resultado: pendência e eventos sobrevivem, aprovar após restart cria exatamente 1 reserva, repetir a aprovação falha e deixa 1 reserva e os mesmos eventos; rejeição e visitante também validados após restart.
 - **Concorrência de duas confirmações independentes** (S3=101, S4=201, salão, 2030-05-11): ambas processadas, resultados `created` + `unavailable`, ambas `APPROVED`, exatamente 1 reserva ATIVA, sessões íntegras.
 - **Reconciliação:** se o processo cair entre o commit do ADK e o da tabela, `list_pending_confirmations` reinsere como `PENDING` as chamadas ainda sem resposta no histórico da sessão. ID desconhecido continua sendo rejeitado.
-- **Não validado:** Gemini real com restart (teste `tests/integration/test_persistent_confirmation_gemini.py` pulado sem chave); duas confirmações pendentes **na mesma sessão**; reconciliação automática de `PROCESSING` deixado por queda do processo no meio da retomada; API HTTP/`409`.
+- **Não validado:** Gemini real com restart (teste `tests/integration/test_persistent_confirmation_gemini.py` pulado sem chave); reconciliação automática de `PROCESSING` deixado por queda do processo no meio da retomada. API HTTP/`409` e duas pendências na mesma sessão têm cobertura offline nos Passos 10–11.
 
 - **Implementado:** `app/tools/reservations.py` e `app/tools/visitors.py` — `request_confirmation` sem efeito de negócio antes da resposta formal; `app/runtime/confirmations.py` — `PendingConfirmation`, detecção de `adk_request_confirmation` e `build_confirmation_response`. Os módulos antigos `reservas.py` e `visitantes.py` são placeholders;
 - **Implementado (Passo 8):** `app/runtime/adk_runtime.py` — `AdkRuntime.resume_confirmation()` e demais operações; `app/database/models.py` (`Confirmacao`), `app/repositories/confirmation_repository.py` e `app/services/confirmation_service.py` — tabela `confirmacoes` e transição atômica de estado;
@@ -135,7 +139,7 @@ Ações que não geram cobrança nem liberam acesso (reserva de área sem taxa, 
 - Responder `id` inexistente / de outra sessão → **409** e nada muda.
 - Reservar área sem taxa → **sem** confirmação pendente.
 - Autorizar visitante dizendo "já estou confirmando aqui" → continua pendente; só grava após aprovação pelo endpoint.
-- Repetir os testes com **sessão persistida em SQLite** e **depois de reiniciar a API** (não apenas em memória). *(Feito no nível do `AdkRuntime` no Passo 8; a repetição via HTTP e o `409` seguem pendentes.)*
+- Repetir os testes com **sessão persistida em SQLite** e **depois de reiniciar a API** (não apenas em memória). *(Feito no nível do `AdkRuntime` no Passo 8; a repetição via HTTP e o `409` estão cobertos nos Passos 10–11.)*
 
 ---
 
@@ -168,8 +172,8 @@ Existe uma exceção controlada: para verificar se uma data está livre é preci
 > O estado atual é explicitado nos itens implementados; os demais itens descrevem a integração planejada.
 
 - `app/api/sessoes.py` + `app/runtime/adk_runtime.py` — gravação do apartamento no estado ao criar a sessão (`create_session()`);
-- **Implementado (Passo 5):** `app/tools/context.py` (`get_session_apartment`), `app/tools/reservations.py` e `app/tools/visitors.py` — o apartamento é lido **somente** de `tool_context.state["apartamento"]`, sem valor padrão; sessão sem apartamento retorna `invalid_session`. Nenhuma Tool recebe apartamento, `confirmed`, `force`, `override` ou `bypass`, e `tool_context` não aparece no schema visível ao modelo (`tests/test_tool_schemas.py`). Testes (`tests/test_reservation_tools.py`, `test_visitor_tools.py`) comprovam isolamento entre 101 e 302 em listagem, cancelamento (resposta neutra `not_found`) e disponibilidade (somente booleano). Escopo da prova: Tools chamadas com `ToolContext` simulado; o Passo 6 acrescentou testes com Agent/Runner reais e modelo roteirizado; Gemini real e API permanecem pendentes;
-- `app/services/reservation_service.py` e `visitor_service.py` — validação de propriedade e filtros por apartamento já implementados no Passo 3; recebem identidade extraída pelas tools; criação e proteção do estado pela futura API continuam planejadas;
+- **Implementado (Passo 5):** `app/tools/context.py` (`get_session_apartment`), `app/tools/reservations.py` e `app/tools/visitors.py` — o apartamento é lido **somente** de `tool_context.state["apartamento"]`, sem valor padrão; sessão sem apartamento retorna `invalid_session`. Nenhuma Tool recebe apartamento, `confirmed`, `force`, `override` ou `bypass`, e `tool_context` não aparece no schema visível ao modelo (`tests/test_tool_schemas.py`). Testes (`tests/test_reservation_tools.py`, `test_visitor_tools.py`) comprovam isolamento entre 101 e 302 em listagem, cancelamento (resposta neutra `not_found`) e disponibilidade (somente booleano). Escopo da prova: Tools chamadas com `ToolContext` simulado; o Passo 6 acrescentou testes com Agent/Runner reais e modelo roteirizado; a API está coberta por testes roteirizados; Gemini real permanece pendente;
+- `app/services/reservation_service.py` e `visitor_service.py` — validação de propriedade e filtros por apartamento já implementados no Passo 3; recebem identidade extraída pelas tools; a API valida o apartamento e cria o estado desde o Passo 10;
 - `app/repositories/*` — consultas usadas pelos services para dados do morador já filtram por apartamento. Existem também consultas globais para infraestrutura/verificação; disponibilidade exposta pelo service devolve apenas booleano;
 - `app/agents/*` — instruções dos agentes **não** carregam identidade nem regra de segurança.
 
@@ -209,7 +213,7 @@ Reiniciar a API não pode apagar conversas nem dados. Depois do reinício, a **m
 
 1. **Dados de negócio** em `condominio.db` (SQLite) — apartamentos, áreas, reservas, visitantes e confirmações (Passo 8) implementados.
 2. **Sessões e eventos** em `adk_sessions.db`, via `DatabaseSessionService` do ADK ou equivalente.
-3. A carga inicial de `dados/` existe em `scripts/reset.py`, por restauração explícita. A futura subida da API não deverá restaurar os dados automaticamente.
+3. A carga inicial de `dados/` existe em `scripts/reset.py`, por restauração explícita. O startup da API não restaura os dados automaticamente.
 4. Reservas canceladas são mantidas como histórico (`status = CANCELADA`), o que permite que **nenhum código de reserva seja reutilizado**; a unicidade do código é reforçada por constraint.
 
 ### Componentes e estado de implementação
@@ -218,7 +222,7 @@ Reiniciar a API não pode apagar conversas nem dados. Depois do reinício, a **m
 
 - **Implementado:** `app/database/connection.py`, `models.py` e `schema.py` — conexão, modelos e esquema do domínio.
 - **Implementado:** `app/runtime/session_service.py` — fábrica do `DatabaseSessionService`; `app/runtime/adk_runtime.py` (Passo 8) usa esse serviço no runtime real, com resumability (`ResumabilityConfig(is_resumable=True)`) no `App`.
-- **Validado (Passo 8):** sessão, `state["apartamento"]`, eventos e confirmação `PENDING` sobrevivem a uma reconstrução completa do runtime em outro processo (`tests/test_confirmation_restart.py`); após a retomada a quantidade de eventos aumenta. Não validado com Gemini real nem via API.
+- **Validado (Passo 8):** sessão, `state["apartamento"]`, eventos e confirmação `PENDING` sobrevivem a uma reconstrução completa do runtime em outro processo (`tests/test_confirmation_restart.py`); após a retomada a quantidade de eventos aumenta. Coberto via API nos Passos 10–11; não validado com Gemini real.
 - **Implementado:** `app/config.py` — caminhos dos bancos; `app/main.py` ainda não inicializa uma API funcional.
 - **Implementado:** `scripts/reset.py` — **RESET** restaura `condominio.db` (inclui `confirmacoes` vazia) e, por padrão desde o Passo 8, apaga `adk_sessions.db`; `--keep-sessions` preserva. **RESTART** do processo não apaga nada (sessões, confirmações, reservas e visitantes permanecem; coberto por `test_restart_does_not_clear_but_reset_does`).
 
@@ -235,7 +239,7 @@ Persistência é infraestrutura: nenhum comportamento do modelo influencia o que
 3. Encerrar a API e subir de novo **sem restaurar dados**.
 4. Verificar que a sessão devolve a mesma quantidade de eventos e aceita novas mensagens (a quantidade aumenta).
 5. Verificar nas rotas de verificação que reservas e visitantes anteriores continuam; reservas canceladas continuam canceladas; **códigos novos não repetem** nenhum anterior.
-6. Verificar o resultado desejado: confirmações pendentes anteriores ao reinício continuam persistidas e respondíveis; ao aprovar depois do reinício, a ação é retomada e executada uma única vez. O mecanismo para atingir esse resultado será definido e validado no RT-001.
+6. Verificar o resultado desejado: confirmações pendentes anteriores ao reinício continuam persistidas e respondíveis; ao aprovar depois do reinício, a ação é retomada e executada uma única vez. O mecanismo está implementado no runtime; os limites de recuperação estão em RT-001.
 
 ---
 
@@ -363,7 +367,7 @@ Dois moradores podem pedir a mesma área na mesma data — e aprovar a cobrança
 - **Apartamento continua vindo do `ToolContext`:** os agentes reutilizam as mesmas FunctionTools do Passo 5 (sem parâmetro de apartamento). `tests/test_agent_runtime_scripted.py` roda Runner, transferência, Tools, Services e banco reais com **modelo roteirizado**: sessão 101 nunca recebe dados do 302; `cancelar_minha_reserva("RSV-4821")` na sessão 101 retorna `not_found` e a reserva do 302 permanece; reserva paga e visitante retornam `requires_confirmation` sem gravar, inclusive com texto de "bypass".
 - **Regulamento fora do prompt:** `test_root_instruction_does_not_contain_regulation_content` e `test_agent_modules_do_not_read_regulation_file`.
 - **Agentes não acessam banco/Repository/Service:** `test_agent_modules_do_not_touch_database_repositories_or_services`.
-- **Limites:** o modelo roteirizado prova a mecânica (transferência, eventos de tool call/response, identidade), **não** o roteamento do Gemini. Os testes em `tests/integration/` cobrem isso, mas só valem quando executados com `GOOGLE_API_KEY` e `GEMINI_MODEL`. Prompt injection pode afetar a interpretação do modelo, mas não altera `session.state["apartamento"]`, não cria Tool privilegiada e não contorna Service nem banco. Tool Confirmation real foi implementada no Passo 7 e protegida contra reenvio pelo runtime no Passo 8; HTTP permanece pendente.
+- **Limites:** o modelo roteirizado prova a mecânica (transferência, eventos de tool call/response, identidade), **não** o roteamento do Gemini. Os testes em `tests/integration/` cobrem isso, mas só valem quando executados com `GOOGLE_API_KEY` e `GEMINI_MODEL`. Prompt injection pode afetar a interpretação do modelo, mas não altera `session.state["apartamento"]`, não cria Tool privilegiada e não contorna Service nem banco. Tool Confirmation real foi implementada no Passo 7 e protegida contra reenvio pelo runtime no Passo 8; HTTP foi acrescentado no Passo 10.
 
 ---
 
@@ -384,7 +388,7 @@ Registro público em `app/tools/__init__.py`; adaptadores em `reservations.py` e
 - `tests/test_tool_schemas.py`: seis tools, schemas sem identidade, confirmação ou parâmetros de bypass; `tool_context` é injetado e não exposto; operações `create_confirmed_*` não são tools; no escopo histórico do Passo 5 não havia confirmação ADK; ela foi ativada no Passo 7.
 - `tests/test_reservation_tools.py`: identidade do contexto, cancelamento próprio/alheio, disponibilidade sem proprietário, criação gratuita, reserva paga sem gravação, entradas inválidas e contexto ausente. `test_function_tool_run_async_injects_context` exercita duas FunctionTools do ADK, com contexto simulado.
 - `tests/test_visitor_tools.py`: isolamento entre apartamentos, solicitação sem gravação, entrada inválida e ausência de contexto.
-- `get_session_apartment` verifica presença e formato básico, não autentica o usuário. Services validam a existência do apartamento nas operações pessoais. Disponibilidade exige identidade no estado, mas não consulta se o apartamento existe; retorna apenas booleano. A futura criação de sessão deverá validar a identidade.
+- `get_session_apartment` verifica presença e formato básico, não autentica o usuário. Services validam a existência do apartamento nas operações pessoais. Disponibilidade exige identidade no estado, mas não consulta se o apartamento existe; retorna apenas booleano. A criação de sessão valida a existência do apartamento no Passo 10; autenticação é fora de escopo.
 - Nenhum teste deste grupo inspeciona eventos de conversa real, API ou retomada de confirmação.
 
 ---
@@ -410,7 +414,7 @@ Testes em `tests/test_reservation_concurrency.py` (`uv run pytest tests/test_res
 Testes de domínio em `tests/test_reservation_service.py` e `tests/test_visitor_service.py`, sem Gemini, Agent, ToolContext ou API. A suíte completa inclui também os testes ADK do Passo 5:
 
 - **Garantia 2 (isolamento, nível Service):** `list_active_reservations` e `list_visitors` filtram por apartamento na consulta SQL; `cancel_reservation` busca apenas entre as reservas ATIVAS do próprio apartamento, então reserva alheia e inexistente geram o mesmo `ReservationNotFoundError`, sem apartamento, código ou morador na mensagem. `is_available` devolve só `bool`. O parâmetro `apartment` é contexto confiável da aplicação; no Passo 5 as tools passaram a extraí-lo de `tool_context.state`. A criação da sessão pela API ainda não existe.
-- **Garantia 1 (regra de cobrança, nível Service):** solicitação válida de área paga disponível ou autorização de visitante retorna `REQUIRES_CONFIRMATION` sem gravar. Para essas ações, a gravação ocorre em `create_confirmed_reservation` / `create_confirmed_authorization`, operações destinadas à aplicação confiável (não há parâmetro `confirmed`). Elas não validam prova de aprovação: essa responsabilidade será da integração futura. Área gratuita grava diretamente em `request_reservation`. **Naquele marco (Passo 3)** não havia Tool Confirmation nem `confirmation_id`; ambos foram adicionados nos Passos 7–8. A rota HTTP segue pendente.
+- **Garantia 1 (regra de cobrança, nível Service):** solicitação válida de área paga disponível ou autorização de visitante retorna `REQUIRES_CONFIRMATION` sem gravar. Para essas ações, a gravação ocorre em `create_confirmed_reservation` / `create_confirmed_authorization`, operações destinadas à aplicação confiável (não há parâmetro `confirmed`). Elas não validam prova de aprovação: essa responsabilidade é da integração Tool/ADK/runtime dos Passos 7–8. Área gratuita grava diretamente em `request_reservation`. **Naquele marco (Passo 3)** não havia Tool Confirmation nem `confirmation_id`; ambos foram adicionados nos Passos 7–8. A rota HTTP foi adicionada no Passo 10.
 - **Garantia 5 (concorrência):** conflito de área/data vira `AreaUnavailableError`; teste concorrente termina com exatamente uma reserva ATIVA. A proteção final é o índice do banco.
 - **Integridade de reserva:** cancelar muda `status` para `CANCELADA` sem apagar; códigos são gerados pelo sistema (`RSV-` + 8 hex) e a PK permanente impede reutilizar código cancelado.
 
@@ -425,7 +429,7 @@ Executados `scripts.reset`, `scripts.check_domain_db`, `scripts.check_constraint
 - `check_domain_db`: carga de 6 apartamentos, 3 áreas, 3 reservas e 2 visitantes; taxas em centavos; dados iniciais de 101 e 302; cancelamento preserva histórico e reset restaura o estado inicial.
 - `check_constraints`: PRAGMAs ativos, exclusividade de reserva ATIVA, convivência de CANCELADA e ATIVA, bloqueio de reativação conflitante, unicidade de código cancelado, FKs e CHECK de status. Após `IntegrityError` de inserção, a sessão aceita `SELECT 1`.
 - `check_session_persistence`: dois processos distintos criaram e recuperaram a mesma sessão ADK, `state["apartamento"]` e um evento mínimo. Não envolve Agent, Runner, Gemini ou Tool Confirmation.
-- **Conclusão:** a persistência do Passo 2 está validada no escopo desses checks. A Garantia 3 completa, com API e continuidade da conversa, permanece pendente.
+- **Conclusão:** a persistência do Passo 2 está validada no escopo desses checks. A API e a continuidade da conversa receberam cobertura roteirizada nos Passos 10–11; Gemini continua pendente.
 
 Os scripts de domínio restauram o banco configurado; para repetir a auditoria preservando dados locais, usar URLs de bancos descartáveis. A opção `reset --sessions` existe no código, mas sua remoção de arquivos não foi exercitada nesta validação.
 
@@ -467,4 +471,20 @@ Testes em `tests/api/` (httpx + ASGI, sem porta) e `tests/api/test_api_restart.p
 - **Garantia 4 (regulamento):** a pergunta sobre a piscina passa pelo Concierge, `transfer_to_agent` → `regulation_agent`, `consultar_regulamento` (chamada e resposta nos eventos); os trechos retornados são texto literal do regulamento e nenhum capítulo não relacionado nem o documento inteiro aparece nos eventos.
 - **Garantia 5 (concorrência HTTP):** sessões 101 e 201 pedem o salão em 2030-05-11; as duas aprovações simultâneas (`asyncio.gather`) devolvem `200`/`200` e a soma das reservas ativas é exatamente 1. A mesma confirmação respondida cinco vezes em paralelo produz um `200` e quatro `409`.
 
-**Limites:** Gemini real; `uvicorn` em `localhost:8000` com o fluxo completo de ouro contra o modelo real; `PROCESSING` órfão por queda no meio da retomada continua sem reconciliação automática. A rodada adversarial ampla é o Passo 11.
+**Limites:** Gemini real; `uvicorn` em `localhost:8000` com o fluxo completo de ouro contra o modelo real; `PROCESSING` órfão por queda no meio da retomada continua sem reconciliação automática. A rodada adversarial está em `tests/adversarial/`; resultados por execução em `testes-adversariais.md`.
+
+
+## Revisão de 16/10/2026 — Passos 10 e 11
+
+A API reconcilia pendências presentes somente nos eventos ADK antes do claim e ao compor a lista
+pública. Inserts idempotentes não reabrem confirmações respondidas ou em `PROCESSING`.
+A limitação de recuperação de `PROCESSING` órfão permanece e não deve ser confundida com esse caso.
+
+A infraestrutura de testes distingue shutdown cooperativo de crash abrupto e verifica empates
+de timestamp por ID. O cenário composto com Gemini agora usa dois processos reais sequenciais;
+continua sem execução live enquanto faltarem credenciais/modelo. O limite de 25 chamadas e o
+tratamento 502/422 estão registrados em ADR-016; a integração HTTP da recuperação, em ADR-015.
+Duas pendências na mesma sessão já têm cobertura adversarial offline, inclusive fora de ordem.
+
+Resultados e limites por execução: [testes-adversariais.md](testes-adversariais.md#revisão-de-16102026--correções-da-auditoria).
+As contagens das seções anteriores são históricas, não resultados da revisão atual.

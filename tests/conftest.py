@@ -51,3 +51,27 @@ async def adk_runtime(session_factory, tmp_path):
     finally:
         await runtime.close()
         reset_services()
+
+
+@pytest_asyncio.fixture
+async def world(session_factory, tmp_path):
+    """Registrada na raiz para seleções que intercalam arquivos de vários diretórios."""
+    import httpx
+    from app.main import create_app
+    from tests.adversarial.conftest import World
+    from app.runtime.adk_runtime import build_adk_runtime
+    from tests.adversarial.hostile_plan import plan
+    from tests.fake_llm import ScriptedLlm
+
+    url = f"sqlite+aiosqlite:///{(tmp_path / 'adk_sessions.db').as_posix()}"
+
+    def factory():
+        return build_adk_runtime(
+            domain_session_factory=session_factory, session_db_url=url, llm=ScriptedLlm(plan=plan))
+
+    app = create_app(factory)
+    async with app.router.lifespan_context(app):
+        # raise_app_exceptions=False: um 500 aparece como resposta (evidência), não como exceção.
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as c:
+            yield World(c, session_factory, app)

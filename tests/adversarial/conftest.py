@@ -7,11 +7,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-import pytest_asyncio
 from sqlalchemy import func, select
 
 from app.database.models import Confirmacao, Reserva, Visitante
-from app.main import create_app
 
 # Texto que NUNCA pode aparecer em saída conversacional/erro de quem não é dono do dado.
 OWNER_SECRETS_302 = ("302", "Rafael", "Moreira", "Marina", "Duarte")
@@ -110,23 +108,3 @@ def non_user_output(events: list[dict]) -> str:
 
 def tool_responses(events: list[dict], name: str) -> list[dict]:
     return [r["response"] for r in calls_and_responses(events)[1] if r.get("name") == name]
-
-
-@pytest_asyncio.fixture
-async def world(session_factory, tmp_path):
-    from app.runtime.adk_runtime import build_adk_runtime
-    from tests.adversarial.hostile_plan import plan
-    from tests.fake_llm import ScriptedLlm
-
-    url = f"sqlite+aiosqlite:///{(tmp_path / 'adk_sessions.db').as_posix()}"
-
-    def factory():
-        return build_adk_runtime(
-            domain_session_factory=session_factory, session_db_url=url, llm=ScriptedLlm(plan=plan))
-
-    app = create_app(factory)
-    async with app.router.lifespan_context(app):
-        # raise_app_exceptions=False: um 500 aparece como resposta (evidência), não como exceção.
-        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as c:
-            yield World(c, session_factory, app)

@@ -166,3 +166,36 @@ def test_adv025_hard_crash_right_after_the_effect_never_duplicates_it(tmp_path):
         assert _status(tmp_path, p["id"]) == "PROCESSING"  # limitação conhecida e documentada (RT-001 #3)
     finally:
         b.stop()
+
+
+@pytest.mark.parametrize("via_message", [False, True])
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_http_recovers_confirmation_missing_from_domain_after_restart(env, tmp_path, via_message, confirmed):
+    """Simula commit ADK sem commit da tabela pública; só HTTP recupera e responde."""
+    import sqlite3
+
+    a = Server(env, tmp_path / "recovery.log").wait_ready()
+    try:
+        sid = a.session("101")
+        [pending] = a.say(sid, PAID)["confirmacoes_pendentes"]
+        before = a.get(f"/sessoes/{sid}/eventos")
+    finally:
+        a.stop()
+    with sqlite3.connect(tmp_path / "condominio.db") as db:
+        db.execute("DELETE FROM confirmacoes WHERE id=?", (pending["id"],))
+    assert _status(tmp_path, pending["id"]) is None
+
+    b = Server(env, tmp_path / "recovery.log").wait_ready()
+    try:
+        assert a.proc.pid != b.proc.pid
+        assert b.get(f"/sessoes/{sid}/eventos") == before
+        if via_message:
+            response = b.say(sid, "Mostre minhas reservas.")
+            assert [p["id"] for p in response["confirmacoes_pendentes"]] == [pending["id"]]
+        assert b.answer(sid, pending["id"], confirmed).status_code == 200
+        assert _status(tmp_path, pending["id"]) == ("APPROVED" if confirmed else "REJECTED")
+        assert len(_salao_0420(tmp_path)) == int(confirmed)
+        assert b.answer(sid, pending["id"], confirmed).status_code == 409
+        assert len(_salao_0420(tmp_path)) == int(confirmed)
+    finally:
+        b.stop()

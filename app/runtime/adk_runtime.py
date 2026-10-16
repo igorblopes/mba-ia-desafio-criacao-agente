@@ -1,6 +1,6 @@
-"""Fronteira entre a (futura) camada HTTP e o Google ADK.
+"""Fronteira entre a camada HTTP e o Google ADK.
 
-A API conhecerá apenas ``AdkRuntime``: Runner, SessionService, ``FunctionResponse``,
+A API conhece apenas ``AdkRuntime``: Runner, SessionService, ``FunctionResponse``,
 ``invocation_id``, retomada e parsing de eventos ficam escondidos aqui.
 
 Divisão de responsabilidades:
@@ -267,7 +267,7 @@ class AdkRuntime:
         return MessageResult(
             session_id=session_id,
             reply=_texts(events),
-            pending_confirmations=await self._confirmations.list_pending_for_session(session_id),
+            pending_confirmations=await self.list_pending_confirmations(session_id),
             event_count=len(session.events),
         )
 
@@ -303,6 +303,10 @@ class AdkRuntime:
         e ``ConfirmationResumeError`` (falha técnica na retomada).
         """
         session = await self._require_session(session_id)
+
+        # Recupera pedidos persistidos pelo ADK antes de uma queda entre os commits.
+        # O insert idempotente não reabre estados finais nem PROCESSING.
+        await self.list_pending_confirmations(session_id)
 
         # 1-2. claim atômico PENDING -> PROCESSING (só uma resposta passa daqui)
         record = await self._confirmations.claim_pending(confirmation_id, session_id)

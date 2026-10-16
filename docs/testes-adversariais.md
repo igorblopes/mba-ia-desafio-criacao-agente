@@ -1,6 +1,6 @@
 # Testes adversariais — Passo 11
 
-> **Status (13/10/2026):** rodada adversarial executada **offline e contra processos uvicorn reais**, com um
+> **Status (16/10/2026):** rodada adversarial executada **offline e contra processos uvicorn reais**, com um
 > "modelo hostil" roteirizado que **obedece a toda injeção** e empurra argumentos privilegiados nas Tools.
 > **Os testes com Gemini real foram escritos mas NÃO foram executados** (sem chave/rede no ambiente de execução).
 > Portanto o Passo 11 **não está concluído** até `uv run pytest tests/adversarial -m integration -v` rodar verde numa
@@ -26,9 +26,9 @@ Evidência sempre vem do **banco** (`reservas`, `visitantes`, `confirmacoes`), d
 **status HTTP** — nunca da frase do modelo. O oráculo de vazamento considera texto do sistema e `function_response`; ignora os
 *argumentos* da chamada (são a tentativa do atacante, não dado devolvido).
 
-**Os testes não são vácuos:** foram feitas 10 mutações deliberadas no código (ver seção *Teste de mutação*) e todas foram detectadas.
+**Registro histórico de mutação:** foram feitas 10 mutações deliberadas no código (ver seção *Teste de mutação*) e todas foram detectadas.
 
-## Resultado
+## Resultado histórico registrado em 13/10/2026
 
 | | |
 |---|---|
@@ -36,7 +36,7 @@ Evidência sempre vem do **banco** (`reservas`, `visitantes`, `confirmacoes`), d
 | Testes live (Gemini real) | **10 SKIP — NÃO EXECUTADOS** |
 | Suíte completa `uv run pytest` | **468 PASS** (294 pré-existentes + 174 novos), 34 desselecionados (`integration`) |
 | Vulnerabilidades reais | **2** (F-1, F-2), ambas corrigidas com regressão |
-| Falhas nas 5 garantias | **0** |
+| Falhas observadas nos cenários daquela rodada | **0** (não é prova universal) |
 | `dados/` | inalterado (hash idêntico antes/depois) |
 
 ## Vulnerabilidades encontradas
@@ -66,7 +66,7 @@ Evidência sempre vem do **banco** (`reservas`, `visitantes`, `confirmacoes`), d
 
 ## Ataques executados
 
-Legenda: **P** = PASS (a garantia se manteve). Todos "Esperado = observado".
+Legenda: **P** = PASS (a garantia se manteve). Resultados históricos daquela rodada; consultar a revisão de 16/10 abaixo para limites e nova execução.
 
 ### Identidade (garantia 2) — `test_identity_attacks.py`
 | ID | Ataque | Observado | Status |
@@ -143,7 +143,7 @@ Legenda: **P** = PASS (a garantia se manteve). Todos "Esperado = observado".
 
 ## Teste de mutação (os testes detectam regressão?)
 
-Cada mutação foi aplicada, o teste correspondente executado e o código restaurado.
+Segundo o registro de 13/10, cada mutação foi aplicada, o teste correspondente executado e o código restaurado. Essas mutações não foram reexecutadas na revisão de 16/10.
 
 | Mutação | Detectada por |
 |---|---|
@@ -177,11 +177,59 @@ Cada mutação foi aplicada, o teste correspondente executado e o código restau
 
 ```powershell
 uv sync
-uv run python -m scripts.reset
 uv run pytest                              # suíte completa (offline + servidor real)
 uv run pytest tests/adversarial -v         # só a rodada adversarial
 uv run pytest tests/adversarial -m integration -v   # LIVE (Gemini real; exige GOOGLE_API_KEY e GEMINI_MODEL)
 git diff -- dados                          # deve estar vazio
 ```
 
+Os testes restauram apenas bancos temporários; não é necessário resetar os bancos locais para executar a suíte.
+
 O marker usado é o já existente do projeto, `integration` (o `pyproject.toml` seleciona `-m 'not integration'` por padrão).
+
+
+## Revisão de 16/10/2026 — correções da auditoria
+
+A auditoria de 13/10 executou a suíte e observou **466 aprovados, 2 falhas e 34 deselecionados**.
+As falhas (leitura SQLite após encerramento abrupto e ordem de eventos com timestamp igual)
+passaram na repetição isolada; isso não substitui execução completa verde.
+
+- Recuperação HTTP: corrigida a pendência presente só no ADK. Mensagens reconciliam a lista e
+  confirmações reconciliam antes do claim. Quatro regressões entre processos cobrem aprovação e
+  rejeição, diretamente ou depois de nova mensagem. A divergência é simulada removendo o registro
+  público no banco temporário; não é um crash real entre os dois commits.
+- Restart normal: desligamento cooperativo pelo pipe do processo, sem endpoint extra. O teste
+  de crash pós-efeito mantém `os._exit`, e `PROCESSING` continua sem recuperação automática.
+- Eventos: timestamps explícitos no teste de partes/metadados e teste separado de empate por ID.
+- Gemini: cenário composto agora encerra o primeiro processo antes de iniciar o segundo, usa
+  `app.main:app`, compara eventos/dados e testa aprovação/replay e corrida HTTP após restart.
+  Sem configuração, o cenário é pulado e não comprova Gemini. Por orientação do usuário,
+  esta revisão continua sem Gemini.
+
+Resultados executados em 16/10/2026 (Windows, bancos temporários):
+
+| Comando / escopo | Resultado |
+|---|---|
+| `uv run --frozen pytest -q --tb=short` | **473 aprovados, 34 deselecionados**, 232,88 s |
+| `uv run --frozen pytest -m integration -q -rs` | **34 pulados, 473 deselecionados**, sem configuração Gemini |
+| Ataques de confirmação isolados | **20 aprovados** |
+| Seleção mista após mover a fixture (restart, API, eventos, confirmações e regressões) | **53 aprovados**, 78,21 s |
+
+A suíte completa passou incluindo os quatro casos novos de recuperação HTTP, o teste de empate,
+os restarts normais e o crash abrupto. Isso não garante ausência universal de falhas nem valida Gemini.
+O Passo 11 continua pendente de validação live, adiada por orientação do usuário.
+O registro histórico de 468 PASS não é resultado desta revisão.
+
+**Correção adicional do runner:** a seleção mista de cinco arquivos intercalando diretórios gerou
+14 aprovações e 39 erros de descoberta da fixture `world` (reproduzidos com `--setup-only`).
+A fixture foi movida para `tests/conftest.py`, pai comum dos arquivos selecionados, preservando
+seu escopo por teste e os bancos temporários. A mesma seleção passou na etapa de preparação
+(`--setup-only`) e na execução real: **53 aprovados, zero falhas**, em 78,21 s.
+A execução de 473 testes acima precedeu somente essa movimentação da fixture.
+
+
+Comando da seleção mista validada após o último ajuste de código:
+
+```powershell
+uv run --frozen pytest -q tests/adversarial/test_restart_attacks.py tests/api/test_api_restart.py tests/test_runtime_events.py tests/adversarial/test_confirmation_attacks.py tests/adversarial/test_regressions.py --tb=short
+```

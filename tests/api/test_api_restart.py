@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import socket
 import subprocess
 import sys
 import time
@@ -12,48 +11,15 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.scripted_plan import PAID, PAID_0511, VISITOR
+from tests.adversarial.realserver import Server as ProcessServer
+from tests.scripted_plan import PAID, VISITOR
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-class Server:
+class Server(ProcessServer):
     def __init__(self, env: dict[str, str], log: Path) -> None:
-        self.port = _free_port()
-        self.base = f"http://127.0.0.1:{self.port}"
-        self._log = log.open("ab")
-        self.proc = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "tests.api_server:app",
-             "--host", "127.0.0.1", "--port", str(self.port)],
-            cwd=ROOT, env=env, stdout=self._log, stderr=subprocess.STDOUT,
-        )
-
-    def wait_ready(self, timeout: float = 90) -> None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.proc.poll() is not None:
-                raise RuntimeError(f"uvicorn terminou ({self.proc.returncode})")
-            try:
-                if httpx.get(f"{self.base}/openapi.json", timeout=2).status_code == 200:
-                    return
-            except httpx.TransportError:
-                time.sleep(0.3)
-        raise TimeoutError("servidor não ficou pronto")
-
-    def stop(self) -> None:
-        self.proc.terminate()
-        try:
-            self.proc.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
-            self.proc.wait()
-        self._log.close()
+        super().__init__(env, log, app="tests.api_server:app")
 
 
 @pytest.fixture

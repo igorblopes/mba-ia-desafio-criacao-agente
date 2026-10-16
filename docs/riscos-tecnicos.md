@@ -1,6 +1,6 @@
 # Riscos técnicos — Residencial Aurora
 
-> **Status do documento (13/10/2026):** registro de riscos com evidências dos Passos 2 a 9 e das regressões de integridade e contenção. A seção de status de cada risco distingue o que foi validado e o que permanece pendente.
+> **Status do documento (16/10/2026):** registro de riscos com implementação e evidências dos Passos 2 a 11 e das regressões de integridade e contenção. A seção de status de cada risco distingue o que foi validado e o que permanece pendente.
 > "Como validar" descreve o plano completo; verificações já executadas estão identificadas nas evidências e em [garantias.md](garantias.md#estado-atual-e-evidências). Arquivo existente não implica funcionalidade implementada.
 
 Documentos relacionados: [`garantias.md`](garantias.md) · [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md)
@@ -15,20 +15,20 @@ Documentos relacionados: [`garantias.md`](garantias.md) · [`decisoes-arquitetur
 | ID | Risco | Impacto | Garantia afetada | Quando validar |
 |---|---|---|---|---|
 | [RT-001](#rt-001--tool-confirmation--sessão-persistente) | Tool Confirmation + sessão persistente | **Alto** | 1, 3 | Validado offline e via HTTP (LLM roteirizado); Gemini pendente |
-| [RT-002](#rt-002--retomada-da-confirmação-no-agente-errado) | Retomada da confirmação no agente errado | **Alto** | 1 | Validado offline; Gemini e múltiplas pendências na mesma sessão pendentes |
+| [RT-002](#rt-002--retomada-da-confirmação-no-agente-errado) | Retomada da confirmação no agente errado | **Alto** | 1 | Validado offline, inclusive múltiplas pendências na mesma sessão; Gemini pendente |
 | [RT-003](#rt-003--concorrência-de-reservas) | Concorrência de reservas | **Alto** | 5 | Domínio, runtime e HTTP (`200`/`200`, uma reserva) validados com LLM roteirizado |
 | [RT-004](#rt-004--vazamento-de-identidade-entre-apartamentos) | Vazamento de identidade entre apartamentos | **Alto** | 2 | Contínuo, desde a primeira tool |
 | [RT-005](#rt-005--excesso-de-conteúdo-do-regulamento-nos-eventos) | Excesso de conteúdo do regulamento nos eventos | Médio | 4 | **Mitigado no Passo 9** (testes offline); Gemini real pendente |
 | [RT-006](#rt-006--reutilização-de-confirmation-id) | Reutilização de confirmation ID | **Alto** | 1 | Proteção no runtime e `409` HTTP validados (LLM roteirizado) |
 
-**Prioridade atual:** executar integrações com Gemini e a rodada adversarial (Passo 11); contrato, isolamento e concorrência HTTP já têm testes com LLM roteirizado. Manter explícita a limitação de recuperação de PROCESSING. As evidências offline não substituem essas validações.
+**Prioridade atual:** executar integrações com Gemini; manter a suíte adversarial offline (Passo 11); contrato, isolamento e concorrência HTTP já têm testes com LLM roteirizado. Manter explícita a limitação de recuperação de PROCESSING. As evidências offline não substituem essas validações.
 
 ---
 
 ## RT-001 — Tool Confirmation + sessão persistente
 
 ### Status
-**Mitigado / validado na versão atual (Google ADK 2.9.1) com LLM roteirizado — Passo 8.** Ainda **não** exercitado com Gemini real nem via API HTTP. Histórico (Passo 7), dividido em:
+**Mitigado / validado na versão atual (Google ADK 2.9.1) com LLM roteirizado — Passo 8.** Exercitado via HTTP nos Passos 10–11; ainda **não** exercitado com Gemini real. Histórico (Passo 7), dividido em:
 
 | Parte | Situação |
 |---|---|
@@ -72,7 +72,7 @@ Variante de reinício: a confirmação é criada, a API é reiniciada e a aprova
 - Fixar a **versão exata** do ADK e reexecutar a validação em qualquer atualização.
 
 ### Como validar
-> O protótipo tornou-se o AdkRuntime e já cobre os itens abaixo offline; repetir com Gemini e, depois, HTTP:
+> O protótipo tornou-se o AdkRuntime e já cobre os itens abaixo offline; repetir com Gemini; HTTP roteirizado já coberto:
 
 1. aprovar → a ação executa **uma vez**;
 2. negar → nada executa;
@@ -80,14 +80,14 @@ Variante de reinício: a confirmação é criada, a API é reiniciada e a aprova
 4. reenviar a aprovação → `409`, sem nova execução;
 5. o resultado da tool é visível nos eventos da sessão.
 
-**Prioridade atual:** validar com Gemini real e, na etapa da API, via HTTP. A topologia foi mantida após os testes offline do Passo 8 (ADR-002).
+**Prioridade atual:** validar com Gemini real; HTTP roteirizado já está coberto. A topologia foi mantida após os testes offline do Passo 8 (ADR-002).
 
 ---
 
 ## RT-002 — Retomada da confirmação no agente errado
 
 ### Status
-**Validado na versão atual com LLM roteirizado** — Passo 7 (InMemory) e **Passo 8**: com `DatabaseSessionService`, resumability e restart real, a resposta formal retomou a Tool no agente que a pediu (`reservation_agent` / `visitor_agent`, conferido em `agent_name`, eventos e efeito no banco) e duas confirmações independentes simultâneas (sessões diferentes) foram retomadas sem interferência. Topologia mantida. Pendentes: Gemini real e duas confirmações pendentes na **mesma** sessão.
+**Validado na versão atual com LLM roteirizado** — Passo 7 (InMemory) e **Passo 8**: com `DatabaseSessionService`, resumability e restart real, a resposta formal retomou a Tool no agente que a pediu (`reservation_agent` / `visitor_agent`, conferido em `agent_name`, eventos e efeito no banco) e duas confirmações independentes simultâneas (sessões diferentes) foram retomadas sem interferência. Topologia mantida. Pendente: Gemini real. Duas confirmações na mesma sessão e fora de ordem têm cobertura em `tests/adversarial/test_confirmation_attacks.py`.
 
 ### Impacto
 **Alto.** Afeta diretamente a Garantia 1 e a escolha da topologia de agentes.
@@ -123,13 +123,13 @@ Também: duas confirmações pendentes na mesma sessão (por exemplo, reserva e 
 ## RT-003 — Concorrência de reservas
 
 ### Status
-**Mitigado no domínio** (Passo 4, 11/10/2026) — `tests/test_reservation_concurrency.py` comprova, sobre Service → Repository → SQLite temporário com sessões independentes, 1 sucesso + 1 `AreaUnavailableError` + 1 reserva ATIVA (101 × 201, salão, 2030-05-11), 25 repetições sem duplicidade, rollback seguido de nova operação, liberação após cancelamento e unicidade de código sob concorrência. **Não encerrado:** confirmações concorrentes já foram validadas no AdkRuntime (`test_two_sessions_approve_concurrently_one_reservation`); falta a camada HTTP. Contenção prolongada no domínio foi corrigida e coberta por regressões (abaixo).
+**Mitigado no domínio** (Passo 4, 11/10/2026) — `tests/test_reservation_concurrency.py` comprova, sobre Service → Repository → SQLite temporário com sessões independentes, 1 sucesso + 1 `AreaUnavailableError` + 1 reserva ATIVA (101 × 201, salão, 2030-05-11), 25 repetições sem duplicidade, rollback seguido de nova operação, liberação após cancelamento e unicidade de código sob concorrência. **Não encerrado:** confirmações concorrentes já foram validadas no AdkRuntime (`test_two_sessions_approve_concurrently_one_reservation`); a camada HTTP também tem cobertura nos Passos 10–11. Contenção prolongada no domínio foi corrigida e coberta por regressões (abaixo).
 
 **Evidência histórica anterior (Passos 2 e 3, 11/10/2026; não descreve toda a suíte atual):** `scripts.check_constraints` passou em banco temporário, incluindo o índice único parcial `uq_reservas_area_data_ativa`. O teste `test_concurrent_creation_single_winner` verifica um sucesso, um `AreaUnavailableError` e uma única reserva ATIVA persistida para 101 × 201 no salão em 2030-05-11. O teste `test_concurrent_many_single_winner`, com seis apartamentos, verifica um sucesso e cinco erros de domínio, mas não conta o estado final. Mensagens sem dados de terceiros são verificadas em testes separados de data ocupada e cancelamento alheio, não nos testes concorrentes.
 
 **Falha histórica (corrigida nesta revisão):** em banco temporário, manter `BEGIN IMMEDIATE` em outra conexão além de `busy_timeout=5000` fazia criar reserva, cancelar reserva e autorizar visitante propagarem `sqlalchemy.exc.OperationalError` (`database is locked`). A regressão agora está em `tests/test_persistence_failures.py`: o domínio devolve `StorageBusyError`, sem efeito parcial, e aceita nova operação após liberar o bloqueio.
 
-**Correção implementada:** `app/services/_persistence.py` traduz apenas `SQLITE_BUSY`/`SQLITE_LOCKED` (incluindo códigos estendidos), após encerrar a sessão; as seis tools devolvem `temporarily_unavailable`, sem SQL. Mantém-se `busy_timeout=5000`, sem retry automático; banco ocupado não significa área ocupada. O ADK já foi exercitado em `tests/test_concurrent_confirmations.py`; duas respostas HTTP `200` continuam pendentes da API.
+**Correção implementada:** `app/services/_persistence.py` traduz apenas `SQLITE_BUSY`/`SQLITE_LOCKED` (incluindo códigos estendidos), após encerrar a sessão; as seis tools devolvem `temporarily_unavailable`, sem SQL. Mantém-se `busy_timeout=5000`, sem retry automático; banco ocupado não significa área ocupada. O ADK já foi exercitado em `tests/test_concurrent_confirmations.py`; duas respostas HTTP `200` têm cobertura nos Passos 10–11.
 
 ### Impacto
 **Alto.** Dupla reserva viola a regra de negócio mais sensível a concorrência (Garantia 5).
@@ -165,15 +165,15 @@ Duas aprovações simultâneas para a mesma área e data podem passar por uma ve
 ## RT-004 — Vazamento de identidade entre apartamentos
 
 ### Status
-**Mitigado em Services, Tools e cenários roteirizados com Runner; Gemini e HTTP pendentes.** Os testes dos Passos 3 e 5 comprovam filtros por apartamento, disponibilidade booleana, cancelamento alheio neutro e ausência de identidade no schema. As tools obtêm o apartamento exclusivamente de `tool_context.state`, sem fallback. Evidências: `tests/test_reservation_tools.py`, `tests/test_visitor_tools.py` e `tests/test_tool_schemas.py`.
+**Mitigado em Services, Tools e cenários roteirizados com Runner; HTTP coberto; Gemini pendente.** Os testes dos Passos 3 e 5 comprovam filtros por apartamento, disponibilidade booleana, cancelamento alheio neutro e ausência de identidade no schema. As tools obtêm o apartamento exclusivamente de `tool_context.state`, sem fallback. Evidências: `tests/test_reservation_tools.py`, `tests/test_visitor_tools.py` e `tests/test_tool_schemas.py`.
 
-**Limite:** os testes isolados do Passo 5 usam contexto simulado; desde o Passo 6 há conversa com Agent/Runner real (`tests/test_agent_runtime_scripted.py`) e o Passo 9 inspeciona eventos reais serializados. Isso não comprova comportamento do Gemini. Não existe criação de sessão pela API. O helper não autentica moradores; a futura camada de criação de sessão deve validar e proteger o estado. Disponibilidade valida presença/formato da identidade, mas não a existência do apartamento no cadastro.
+**Limite:** os testes isolados do Passo 5 usam contexto simulado; desde o Passo 6 há conversa com Agent/Runner real (`tests/test_agent_runtime_scripted.py`) e o Passo 9 inspeciona eventos reais serializados. Isso não comprova comportamento do Gemini. A API cria a sessão e valida o apartamento desde o Passo 10. O helper não autentica moradores; autenticação permanece fora de escopo. Disponibilidade valida presença/formato da identidade, mas não a existência do apartamento no cadastro.
 
 ### Impacto
 **Alto.** Quebra a Garantia 2; envolve dados de outros moradores.
 
 ### Descrição
-Mesmo com a identidade vinda da sessão, dados de outros apartamentos podem vazar por **saídas** das tools: mensagens de erro, resultados de consulta, resposta de conflito. Tudo que uma tool devolve entra na conversa **e nos eventos persistidos**, que a futura API deverá expor por completo (`GET /sessoes/{id}/eventos`).
+Mesmo com a identidade vinda da sessão, dados de outros apartamentos podem vazar por **saídas** das tools: mensagens de erro, resultados de consulta, resposta de conflito. Tudo que uma tool devolve entra na conversa **e nos eventos persistidos**, que a API expõe por completo (`GET /sessoes/{id}/eventos`).
 
 ### Cenário de falha
 - Uma tool aceita `apartamento` como parâmetro e o modelo o preenche com outro valor.
@@ -236,7 +236,7 @@ O retorno da tool de regulamento fica registrado nos eventos e acompanha o hist�
 ## RT-006 — Reutilização de confirmation ID
 
 ### Status
-**Mitigado no AdkRuntime — Passo 8; HTTP pendente.** O ADK isolado reexecuta a Tool e pode duplicar visitante (descoberta preservada em `test_finding_reused_visitor_confirmation_id`). O runtime barra reenvios, IDs desconhecidos e de outra sessão com `ConfirmationNotPendingError`, antes do Runner. Evidências: `tests/test_persistent_confirmation.py`, `tests/test_confirmation_service.py`, `tests/test_concurrent_confirmations.py` e `tests/test_confirmation_restart.py`. A futura API ainda precisa traduzir o erro para 409.
+**Mitigado no AdkRuntime (Passo 8) e HTTP (Passos 10–11).** O ADK isolado reexecuta a Tool e pode duplicar visitante (descoberta preservada em `test_finding_reused_visitor_confirmation_id`). O runtime barra reenvios, IDs desconhecidos e de outra sessão com `ConfirmationNotPendingError`, antes do Runner. Evidências: `tests/test_persistent_confirmation.py`, `tests/test_confirmation_service.py`, `tests/test_concurrent_confirmations.py` e `tests/test_confirmation_restart.py`. A API traduz o erro para 409.
 
 ### Impacto
 **Alto.** Pode causar execução duplicada de ação com cobrança ou liberação de acesso.
@@ -251,7 +251,7 @@ Uma confirmação já respondida (aprovada ou negada) não deve poder ser usada 
 - Um `id` negado depois é aprovado.
 
 ### Mitigação e validação restante
-- Somente `PENDING` **da sessão** aceita resposta; caso contrário, `ConfirmationNotPendingError` (futuro HTTP 409).
+- Somente `PENDING` **da sessão** aceita resposta; caso contrário, `ConfirmationNotPendingError` (HTTP 409).
 - Claim **implementado e atômico** `PENDING → PROCESSING`, condicionado à sessão/ID/estado, seguido de `APPROVED/REJECTED` após resposta da Tool.
 - A execução ocorre somente para quem vence a transição.
 - Constraints de integridade nos dados de negócio como segunda barreira (por exemplo, unicidade da reserva).
@@ -272,7 +272,7 @@ Uma confirmação já respondida (aprovada ou negada) não deve poder ser usada 
 ## Observações do Passo 6
 
 - *(Histórico do Passo 6; ver RT-001/RT-002 acima para o estado após o Passo 8.)* RT-001 e RT-002 estavam abertos: Tool Confirmation real e retomada ainda não haviam sido implementadas. A transferência Concierge → especialista foi exercitada apenas com Runner real e modelo roteirizado; o comportamento de roteamento com Gemini real é instável por natureza e deve ser observado via `pytest -m integration`.
-- RT-004: o cenário 101 × 302 foi exercitado de ponta a ponta no ADK com modelo roteirizado; permanece pendente a execução com Gemini real e via API.
+- RT-004: o cenário 101 × 302 foi exercitado de ponta a ponta no ADK com modelo roteirizado; permanece pendente a execução com Gemini real; API coberta no Passo 10.
 
 ---
 
@@ -280,16 +280,16 @@ Uma confirmação já respondida (aprovada ou negada) não deve poder ser usada 
 
 Questões que a validação dos riscos acima deve responder:
 
-- Topologia validada offline; repetir com Gemini e HTTP (RT-001/RT-002).
+- Topologia validada offline; repetir com Gemini; HTTP roteirizado coberto (RT-001/RT-002).
 - ID já decidido no Passo 8: `function_call_id` do ADK (ADR-012).
 - Ordem implementada: claim PROCESSING → ADK → estado final. Permanece aberta a recuperação automática de falhas ambíguas (RT-001, RT-006).
-- Validar a política já implementada de transação/espera e resposta a contenção na integração HTTP (RT-003).
+- Manter regressões da política de transação/espera e resposta a contenção HTTP (RT-003).
 - Granularidade e limites da recuperação foram decididos no Passo 9 (artigo; 3 trechos; 3000 caracteres); calibrar com perguntas reais e Gemini (RT-005).
-- Restart de pendências já validado entre processos; falta validar com Gemini e posteriormente HTTP (RT-001).
+- Restart de pendências já validado entre processos; falta validar com Gemini; HTTP roteirizado coberto (RT-001).
 
 ## Revisão de 13/10/2026
 
-- A exportação integral de eventos substitui a projeção resumida em `get_events`; `test_runtime_events.py` cobre partes mistas/metadados e o teste de ouro compara conteúdo completo entre processos. A futura API deve usar essa exportação.
+- A exportação integral de eventos substitui a projeção resumida em `get_events`; `test_runtime_events.py` cobre partes mistas/metadados e o teste de ouro compara conteúdo completo entre processos. A API usa essa exportação.
 - Falha do teto do primeiro trecho corrigida e coberta com parágrafo sintético maior que 3000 caracteres. Nenhum arquivo de `dados/` foi alterado.
 - Integração de regulamento reforçada: “não encontrei” não neutraliza indicadores de uma regra inventada. O detector é conservador, não uma prova semântica universal. Gemini continua sem validação quando os testes são pulados por falta de configuração.
 
@@ -298,7 +298,45 @@ Questões que a validação dos riscos acima deve responder:
 Evidências em `tests/api/` com LLM roteirizado; nenhum risco foi dado como encerrado só por existir endpoint.
 
 - **RT-001:** pendência sobrevive a restart de processo `uvicorn` e é aprovada depois (`test_api_restart.py`). Pendente: Gemini real.
-- **RT-003:** duas aprovações HTTP simultâneas (101 × 201, salão, 2030-05-11) → `200`/`200` e exatamente uma reserva ativa; sem `500`. Pendente: repetição sob carga maior e com Gemini.
+- **RT-003:** duas aprovações HTTP simultâneas (101 × 201, salão, 2030-05-11) → `200`/`200` e exatamente uma reserva ativa; sem `500`. Carga moderada de 10 sessões coberta no Passo 11; Gemini pendente.
 - **RT-004:** sessão 101 afirmando ser o 302 não obtém `RSV-4821` nem visitante do 302, nem na resposta nem nos eventos; cancelamento alheio devolve `not_found`. Pendente: injeção de prompt com modelo real.
 - **RT-005:** eventos HTTP da consulta à piscina contêm só os trechos recuperados. Pendente: perguntas variadas com Gemini.
 - **RT-006:** replay, ID inexistente e ID de outra sessão → `409` sem novo efeito. Pendente: reconciliação de `PROCESSING` órfão.
+
+
+## Revisão de 16/10/2026 — Passos 10 e 11
+
+A API reconcilia pendências presentes somente nos eventos ADK antes do claim e ao compor a lista
+pública. Inserts idempotentes não reabrem confirmações respondidas ou em `PROCESSING`.
+A limitação de recuperação de `PROCESSING` órfão permanece e não deve ser confundida com esse caso.
+
+A infraestrutura de testes distingue shutdown cooperativo de crash abrupto e verifica empates
+de timestamp por ID. O cenário composto com Gemini agora usa dois processos reais sequenciais;
+continua sem execução live enquanto faltarem credenciais/modelo. O limite de 25 chamadas e o
+tratamento 502/422 estão registrados em ADR-016; a integração HTTP da recuperação, em ADR-015.
+Duas pendências na mesma sessão já têm cobertura adversarial offline, inclusive fora de ordem.
+
+Resultados e limites por execução: [testes-adversariais.md](testes-adversariais.md#revisão-de-16102026--correções-da-auditoria).
+As contagens das seções anteriores são históricas, não resultados da revisão atual.
+
+
+## RT-007 — Custo e disponibilidade em laços do modelo
+
+**Estado:** mitigado por `MAX_LLM_CALLS_PER_RUN = 25`, com regressões F-1 em
+`tests/adversarial/test_regressions.py`. O teto limita chamadas por execução, não custo total
+por sessão. Em mensagens o erro é 502; durante confirmação segue o tratamento 500/503 da
+retomada. **Residual:** calibrar o teto com Gemini antes de declarar os fluxos live validados.
+
+## RT-008 — Serialização de entrada inválida na resposta de erro
+
+**Estado:** mitigado pelo handler 422 que não ecoa input (`app/api/errors.py`).
+Regressões F-2 cobrem NaN, Infinity e overflow numérico. Não há tradução de todo erro inesperado
+para 4xx: falhas internas continuam detectáveis como 500.
+
+## RT-009 — Evidência instável de restart e ordem dos eventos
+
+**Estado:** infraestrutura revisada em 16/10. A auditoria observou `disk I/O error` após
+encerramento abrupto no Windows; a causa completa não foi demonstrada. O restart normal agora
+aguarda shutdown do lifespan via pipe; crash continua um teste separado. Não foram introduzidos
+retries de leitura para ocultar erros SQLite. Eventos artificiais usam timestamps explícitos,
+e empates têm teste específico da ordem por ID. Resultados completos em `testes-adversariais.md`.

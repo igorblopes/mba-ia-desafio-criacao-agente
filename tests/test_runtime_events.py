@@ -11,7 +11,8 @@ async def test_get_events_preserves_all_parts_and_metadata(adk_runtime):
     info = await adk_runtime.create_session("101")
     session = await adk_runtime._require_session(info.id)
     # Timestamps explícitos e crescentes: o armazenamento ordena por timestamp, e no Windows o relógio
-    # (~15 ms) pode dar o MESMO valor a dois eventos criados em sequência, tornando a ordem indefinida.
+    # pode dar o MESMO valor a dois eventos criados em sequência. Nesse caso o ADK
+    # desempata por ID, não pela ordem de construção.
     events = [
         Event(author="reservation_agent", invocation_id="mixed", timestamp=1_000.0, content=types.Content(
             role="model", parts=[
@@ -38,3 +39,16 @@ async def test_get_events_preserves_all_parts_and_metadata(adk_runtime):
 async def test_get_events_unknown_session(adk_runtime):
     with pytest.raises(SessionNotFoundError):
         await adk_runtime.get_events("missing")
+
+
+async def test_equal_timestamps_have_stable_id_order(adk_runtime):
+    info = await adk_runtime.create_session("101")
+    session = await adk_runtime._require_session(info.id)
+    for identifier in ("event-z", "event-a"):
+        await adk_runtime._sessions.append_event(session=session, event=Event(
+            id=identifier, timestamp=2_000.0, author="reservation_agent",
+            invocation_id=identifier, content=types.Content(
+                role="model", parts=[types.Part(text=identifier)])))
+    first = await adk_runtime.get_events(info.id)
+    assert [event["id"] for event in first] == ["event-a", "event-z"]
+    assert await adk_runtime.get_events(info.id) == first
