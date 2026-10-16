@@ -1,6 +1,6 @@
 # Riscos técnicos — Residencial Aurora
 
-> **Status do documento (16/10/2026):** registro de riscos com implementação e evidências dos Passos 2 a 11 e das regressões de integridade e contenção. A seção de status de cada risco distingue o que foi validado e o que permanece pendente.
+> **Estado final (Passo 13, 16/10/2026):** implementação concluída e congelada. As cinco garantias estão implementadas e cobertas por testes offline (`uv run pytest`: 486 passed, 35 deselected) e pelo ensaio integral do avaliador com **Gemini real, uvicorn real e restart real** (RUN 1 = PASS, RUN 2 = PASS; [ensaio-avaliador.md](ensaio-avaliador.md)). O [README](../README.md) é a descrição autoritativa do sistema final; as seções datadas deste documento são registro histórico, e menções a "Gemini pendente" nelas descrevem o estado anterior ao Passo 12.
 > "Como validar" descreve o plano completo; verificações já executadas estão identificadas nas evidências e em [garantias.md](garantias.md#estado-atual-e-evidências). Arquivo existente não implica funcionalidade implementada.
 
 Documentos relacionados: [`garantias.md`](garantias.md) · [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md)
@@ -12,16 +12,23 @@ Documentos relacionados: [`garantias.md`](garantias.md) · [`decisoes-arquitetur
 
 ## Resumo
 
-| ID | Risco | Impacto | Garantia afetada | Quando validar |
-|---|---|---|---|---|
-| [RT-001](#rt-001--tool-confirmation--sessão-persistente) | Tool Confirmation + sessão persistente | **Alto** | 1, 3 | Validado offline e via HTTP (LLM roteirizado); Gemini pendente |
-| [RT-002](#rt-002--retomada-da-confirmação-no-agente-errado) | Retomada da confirmação no agente errado | **Alto** | 1 | Validado offline, inclusive múltiplas pendências na mesma sessão; Gemini pendente |
-| [RT-003](#rt-003--concorrência-de-reservas) | Concorrência de reservas | **Alto** | 5 | Domínio, runtime e HTTP (`200`/`200`, uma reserva) validados com LLM roteirizado |
-| [RT-004](#rt-004--vazamento-de-identidade-entre-apartamentos) | Vazamento de identidade entre apartamentos | **Alto** | 2 | Contínuo, desde a primeira tool |
-| [RT-005](#rt-005--excesso-de-conteúdo-do-regulamento-nos-eventos) | Excesso de conteúdo do regulamento nos eventos | Médio | 4 | **Mitigado no Passo 9** (testes offline); Gemini real pendente |
-| [RT-006](#rt-006--reutilização-de-confirmation-id) | Reutilização de confirmation ID | **Alto** | 1 | Proteção no runtime e `409` HTTP validados (LLM roteirizado) |
+Status final (Passo 13): `VALIDADO` = coberto por testes e pelo ensaio E2E com Gemini real; `MITIGADO` = proteção implementada com risco residual conhecido; `ABERTO` = sem mitigação completa.
 
-**Prioridade atual:** executar integrações com Gemini; manter a suíte adversarial offline (Passo 11); contrato, isolamento e concorrência HTTP já têm testes com LLM roteirizado. Manter explícita a limitação de recuperação de PROCESSING. As evidências offline não substituem essas validações.
+| ID | Risco | Impacto | Garantia afetada | Status final |
+|---|---|---|---|---|
+| [RT-001](#rt-001--tool-confirmation--sessão-persistente) | Tool Confirmation + sessão persistente | **Alto** | 1, 3 | **VALIDADO** (offline, HTTP e Gemini real com restart: CP-13b/CP-14d). Residual: `PROCESSING` órfão |
+| [RT-002](#rt-002--retomada-da-confirmação-no-agente-errado) | Retomada da confirmação no agente errado | **Alto** | 1 | **VALIDADO** (offline e Gemini real) |
+| [RT-003](#rt-003--concorrência-de-reservas) | Concorrência de reservas | **Alto** | 5 | **VALIDADO** (domínio, runtime, HTTP e Gemini real: CP-16a–c) |
+| [RT-004](#rt-004--vazamento-de-identidade-entre-apartamentos) | Vazamento de identidade entre apartamentos | **Alto** | 2 | **VALIDADO** (offline e Gemini real: CP-02, CP-03, CP-10) |
+| [RT-005](#rt-005--excesso-de-conteúdo-do-regulamento-nos-eventos) | Excesso de conteúdo do regulamento nos eventos | Médio | 4 | **VALIDADO** (offline e Gemini real: CP-12c). Residual: busca lexical |
+| [RT-006](#rt-006--reutilização-de-confirmation-id) | Reutilização de confirmation ID | **Alto** | 1 | **VALIDADO** (`409` offline e Gemini real: CP-08, CP-09, CP-15c) |
+| [RT-007](#rt-007--custo-e-disponibilidade-em-laços-do-modelo) | Custo e disponibilidade em laços do modelo | Médio | — | **MITIGADO** (teto de 25 chamadas por execução) |
+| [RT-008](#rt-008--serialização-de-entrada-inválida-na-resposta-de-erro) | Serialização de entrada inválida | Baixo | — | **MITIGADO** |
+| [RT-009](#rt-009--evidência-instável-de-restart-e-ordem-dos-eventos) | Evidência instável de restart | Baixo | 3 | **MITIGADO** |
+| [RT-010](#rt-010--cota-e-indisponibilidade-do-gemini) | Cota e indisponibilidade do Gemini | Médio | — | **ABERTO** (retry com backoff; esgotado, a API devolve 500) |
+| — | `PROCESSING` órfão após queda no meio da retomada (RT-001, RT-006) | Médio | 1 | **ABERTO** (seguro contra duplicação; sem reconciliação automática) |
+
+**Prioridade atual:** manter a suíte offline verde e repetir o ensaio E2E a cada mudança de ADK, modelo ou topologia. Os itens `ABERTO` acima são limitações aceitas para a entrega.
 
 ---
 
@@ -340,3 +347,11 @@ encerramento abrupto no Windows; a causa completa não foi demonstrada. O restar
 aguarda shutdown do lifespan via pipe; crash continua um teste separado. Não foram introduzidos
 retries de leitura para ocultar erros SQLite. Eventos artificiais usam timestamps explícitos,
 e empates têm teste específico da ordem por ID. Resultados completos em `testes-adversariais.md`.
+
+## RT-010 — Cota e indisponibilidade do Gemini
+
+**Estado:** ABERTO. `app/agents/model.py` repete 408/429/5xx com backoff exponencial
+(`HttpRetryOptions`, 8 tentativas). Se a cota acabar e os retries não bastarem, a mensagem
+termina em HTTP 500, sem traceback no corpo. O free tier observado no Passo 12 (5 req/min,
+20 req/dia) não comporta um run do fluxo do avaliador. Mapear erros do provedor para 503 não foi
+implementado.

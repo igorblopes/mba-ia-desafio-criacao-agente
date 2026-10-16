@@ -1,7 +1,7 @@
 """Casos de uso de visitantes. Independente de IA, HTTP e ADK.
 
-``apartment`` é CONTEXTO CONFIÁVEL da camada de aplicação (futuramente vindo de
-``session.state["apartamento"]``). O modelo nunca poderá escolhê-lo.
+``apartment`` é CONTEXTO CONFIÁVEL da camada de aplicação (vem de
+``session.state["apartamento"]`` via ``ToolContext``). O modelo nunca o escolhe.
 
 ``request_authorization`` nunca grava: autorizar visitante libera acesso ao
 prédio e sempre exige confirmação. ``create_confirmed_authorization`` é função

@@ -20,3 +20,9 @@ data/e2e_evidence_*.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Test / tooling artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.log

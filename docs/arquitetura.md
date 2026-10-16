@@ -1,9 +1,9 @@
 # Arquitetura — Residencial Aurora
 
-> **Status do documento (16/10/2026):** arquitetura alvo e implementação dos Passos 10–11, com validação offline e Gemini pendente. Persistência, Services, sete FunctionTools, a topologia Concierge + Reservas + Visitantes + Regulamento, a confirmação persistente/retomável (Passo 8), a consulta seletiva ao regulamento (Passo 9) e a camada FastAPI com o contrato HTTP (Passo 10) existem. A suíte adversarial existe e usa modelo hostil roteirizado; Gemini real continua pendente. Resultados por execução em `testes-adversariais.md`.
+> **Estado final (Passo 13, 16/10/2026):** implementação concluída e congelada. As cinco garantias estão implementadas e cobertas por testes offline (`uv run pytest`: 486 passed, 35 deselected) e pelo ensaio integral do avaliador com **Gemini real, uvicorn real e restart real** (RUN 1 = PASS, RUN 2 = PASS; [ensaio-avaliador.md](ensaio-avaliador.md)). O [README](../README.md) é a descrição autoritativa do sistema final; as seções datadas deste documento são registro histórico, e menções a "Gemini pendente" nelas descrevem o estado anterior ao Passo 12.
 > Mudanças de decisão são registradas em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md). Decisão aceita não significa implementação ou validação ponta a ponta.
 
-## Estado atual até o Passo 10
+## Histórico de implementação (Passos 2–10)
 
 - **Passo 2 — persistência validada:** modelos em `app/database/models.py`, criação do esquema em `schema.py`, conexão e sessões em `connection.py`, repositories e restauração em `scripts/reset.py`. O banco de domínio contém apartamentos, áreas, reservas e visitantes; a tabela de confirmações foi adicionada no Passo 8. Taxas são armazenadas em centavos inteiros.
 - **Sessão ADK:** `app/runtime/session_service.py` cria `DatabaseSessionService` separado do domínio. Sessão, estado e evento mínimo sobreviveram à troca de processo; isso não comprova Runner, conversa ou retomada de confirmação.
@@ -15,8 +15,8 @@
 - **Passo 8 — confirmação persistente, idempotente e retomável:** `app/runtime/adk_runtime.py` (`AdkRuntime`) usa `DatabaseSessionService` + `ResumabilityConfig(is_resumable=True)`; o estado público da confirmação vive em `confirmacoes` (`condominio.db`) via `ConfirmationRepository`/`ConfirmationService` (`PENDING → PROCESSING → APPROVED | REJECTED`, claim atômico). Restart real validado em processos separados (LLM roteirizado).
 - **Passo 9 — Regulation Agent e consulta seletiva:** `app/agents/regulation.py` (somente a Tool `consultar_regulamento`), `app/tools/regulation.py`, `app/services/regulation_service.py` (normalização, ranking determinístico, limites, `query_too_broad`/`not_found`), `app/repositories/regulation_repository.py` (único acesso a `dados/regulamento.md`; parser Markdown em memória) e `app/domain/regulation.py`. Sem banco vetorial, sem rede, sem API key na busca.
 - **Passo 10 — contrato HTTP:** `app/main.py` (`create_app`, lifespan, routers, handlers) e `app/api/` (`schemas.py`, `sessoes.py`, `confirmacoes.py`, `verificacao.py`, `dependencies.py`, `errors.py`). A FastAPI é uma camada fina: valida o HTTP, encaminha ao `AdkRuntime`/Services e traduz erros de domínio (`404`/`409`). Um único `AdkRuntime` é criado no lifespan e guardado em `app.state.adk_runtime`; nada de sessões de moradores em memória. O startup **não** reseta dados: com o banco de domínio não inicializado, falha pedindo `uv run python -m scripts.reset`. `ApartmentService` (novo) só valida a existência do apartamento antes de criar a sessão.
-- **Pendente:** validação com Gemini real. A rodada adversarial offline está implementada (Passo 11). `app/agents/regulamento.py`, `app/tools/regulamento.py`, `reservas.py` e `visitantes.py` (nomes em português) são placeholders antigos; as implementações estão nos módulos em inglês.
-- **Limite de confirmação:** `POST /confirmacoes` e o `409` existem (Passo 10), validados com LLM roteirizado; Gemini real não foi exercitado com restart. A pendência é persistida (tabela + eventos ADK) e sobrevive a restart, inclusive entre processos `uvicorn`.
+- **Passo 12 — ensaio integral com Gemini real:** `tests/e2e/test_evaluator_flow.py` percorre o fluxo do avaliador com uvicorn real, restart real e aprovações simultâneas; RUN 1 e RUN 2 = PASS ([ensaio-avaliador.md](ensaio-avaliador.md)). `app/agents/regulamento.py`, `app/tools/regulamento.py`, `reservas.py` e `visitantes.py` (nomes em português) são placeholders antigos, sem código nem import; as implementações estão nos módulos em inglês.
+- **Confirmação:** `POST /confirmacoes` e o `409` existem (Passo 10). A pendência é persistida (tabela + eventos ADK) e sobrevive a restart entre processos `uvicorn`, com LLM roteirizado (`tests/api/test_api_restart.py`) e com Gemini real (CP-13b/CP-14d do ensaio).
 - Resultados e limites da validação: [garantias.md](garantias.md#estado-atual-e-evidências).
 
 Documentos relacionados:
@@ -206,7 +206,7 @@ Responsável por dúvidas sobre o regulamento (`regulation_agent`). **Não receb
 
 A escolha inicial é **Root Agent + `sub_agents`, com transferência do Concierge para o especialista**. Essa topologia está implementada e mantém explícito qual especialista solicitou uma confirmação.
 
-> **Validada offline nos Passos 7–8.** A transferência funciona com Tool Confirmation, sessão persistida e restart nos testes roteirizados. Gemini real permanece pendente. Se os testes do [RT-001](riscos-tecnicos.md#rt-001--tool-confirmation--sessão-persistente) ou do [RT-002](riscos-tecnicos.md#rt-002--retomada-da-confirmação-no-agente-errado) demonstrarem que a retomada não volta ao agente correto, a topologia poderá ser revista e a mudança deverá ser registrada em ADR. Ver [ADR-002](decisoes-arquiteturais.md#adr-002--arquitetura-multiagente).
+> **Validada offline nos Passos 7–8 e com Gemini real no Passo 12.** A transferência funciona com Tool Confirmation, sessão persistida e restart. Se os testes do [RT-001](riscos-tecnicos.md#rt-001--tool-confirmation--sessão-persistente) ou do [RT-002](riscos-tecnicos.md#rt-002--retomada-da-confirmação-no-agente-errado) demonstrarem que a retomada não volta ao agente correto, a topologia poderá ser revista e a mudança deverá ser registrada em ADR. Ver [ADR-002](decisoes-arquiteturais.md#adr-002--arquitetura-multiagente).
 
 ---
 
@@ -531,67 +531,29 @@ Rotas com `{session_id}` respondem `404` se a sessão não existir. `POST /sesso
 
 ---
 
-## 12. Estrutura planejada do repositório
+## 12. Estrutura do repositório
 
-> **Proposta inicial de organização, não inventário completo.** O estado atual está na abertura deste documento. A implementação também inclui `app/domain/`, `services/_common.py`, `services/_persistence.py`, `services/provider.py`, `tools/context.py`, `tools/reservations.py`, `tools/visitors.py`, `repositories/apartment_repository.py`, `runtime/session_service.py`, `database/models.py`, scripts de verificação e `tests/`. Os módulos `tools/reservas.py` e `tools/visitantes.py` da proposta abaixo são placeholders, não implementações alternativas.
+Inventário dos módulos de produção (testes em `tests/`, ver README › Como rodar).
 
 ```text
-residencial-aurora/
-│
-├── app/
-│   ├── main.py
-│   ├── config.py
-│   │
-│   ├── api/
-│   │   ├── sessoes.py
-│   │   ├── confirmacoes.py
-│   │   └── verificacao.py
-│   │
-│   ├── agents/
-│   │   ├── concierge.py
-│   │   ├── reservas.py
-│   │   ├── visitantes.py
-│   │   └── regulamento.py
-│   │
-│   ├── tools/
-│   │   ├── reservas.py
-│   │   ├── visitantes.py
-│   │   └── regulamento.py
-│   │
-│   ├── services/
-│   │   ├── reservation_service.py
-│   │   ├── visitor_service.py
-│   │   └── regulation_service.py
-│   │
-│   ├── repositories/
-│   │   ├── reservation_repository.py
-│   │   ├── visitor_repository.py
-│   │   └── area_repository.py
-│   │
-│   ├── runtime/
-│   │   └── adk_runtime.py
-│   │
-│   └── database/
-│       ├── connection.py
-│       └── schema.py
-│
-├── scripts/
-│   └── reset.py
-│
-├── docs/
-│
-├── dados/
-│
-├── data/
-│   ├── condominio.db
-│   └── adk_sessions.db
-│
-├── .env.example
-├── .gitignore
-├── pyproject.toml
-├── uv.lock
-└── README.md
+app/
+├── main.py                 create_app(), lifespan (não reseta dados), routers
+├── config.py               Settings (pydantic-settings), export_genai_environment()
+├── api/                    sessoes.py, confirmacoes.py, verificacao.py, schemas.py, errors.py, dependencies.py
+├── agents/                 concierge.py (root), reservations.py, visitors.py, regulation.py, model.py
+├── tools/                  context.py, reservations.py, visitors.py, regulation.py
+├── services/               reservation_, visitor_, confirmation_, regulation_, apartment_service.py,
+│                           provider.py, _common.py, _persistence.py
+├── repositories/           apartment_, area_, reservation_, visitor_, confirmation_, regulation_repository.py
+├── runtime/                adk_runtime.py (AdkRuntime), confirmations.py, session_service.py, actions.py
+├── database/               models.py, schema.py, connection.py
+└── domain/                 errors.py, types.py, regulation.py
+scripts/                    reset.py (+ scripts de verificação usados no desenvolvimento)
+dados/                      estado inicial e regulamento (somente leitura)
+data/                       condominio.db, adk_sessions.db (gerados, fora do Git)
 ```
+
+`app/agents/{reservas,visitantes,regulamento}.py` e `app/tools/{reservas,visitantes,regulamento}.py` contêm apenas uma docstring da proposta inicial; não são importados.
 
 Notas:
 
@@ -607,7 +569,7 @@ Notas:
 
 Resumo; o detalhe está em [`decisoes-arquiteturais.md`](decisoes-arquiteturais.md) e [`riscos-tecnicos.md`](riscos-tecnicos.md).
 
-- Validação com Gemini da topologia `sub_agents` + transferência já comprovada offline.
+- ~~Validação com Gemini da topologia `sub_agents` + transferência~~ — feita no ensaio do Passo 12.
 - Recuperação automática de PROCESSING órfão e comportamento de múltiplas pendências na mesma sessão. O ID já é o function_call_id (ADR-012).
 - Calibração da busca e redação com Gemini; granularidade por artigo, busca lexical e limites já definidos (ADR-009).
 - Contenção: espera limitada a 5000 ms, sem retry automático; `SQLITE_BUSY`/`SQLITE_LOCKED` viram `StorageBusyError` e as tools devolvem `temporarily_unavailable`. Integração HTTP coberta no Passo 10 (duas aprovações simultâneas → `200`/`200`, uma reserva ativa). Já implementados: WAL, `busy_timeout=5000` e índice único parcial `uq_reservas_area_data_ativa`; código `RSV-` + 8 hex com até cinco tentativas, protegido pela PK e pelo histórico preservado (ADRs 008 e 011).

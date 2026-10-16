@@ -1,8 +1,8 @@
 # Decisões arquiteturais — Residencial Aurora
 
-> **Status do documento (16/10/2026):** decisões de arquitetura com implementação dos Passos 10–11 e validação offline; Gemini pendente. Sete FunctionTools, os quatro agentes, a confirmação persistente (Passo 8) e a consulta seletiva ao regulamento (Passo 9) estão implementados; a API HTTP está implementada no Passo 10.
+> **Estado final (Passo 13, 16/10/2026):** implementação concluída e congelada. As cinco garantias estão implementadas e cobertas por testes offline (`uv run pytest`: 486 passed, 35 deselected) e pelo ensaio integral do avaliador com **Gemini real, uvicorn real e restart real** (RUN 1 = PASS, RUN 2 = PASS; [ensaio-avaliador.md](ensaio-avaliador.md)). O [README](../README.md) é a descrição autoritativa do sistema final; as seções datadas deste documento são registro histórico, e menções a "Gemini pendente" nelas descrevem o estado anterior ao Passo 12.
 > **Aceita** indica decisão, não comprovação de funcionamento. Resultados e limites dos testes constam em [garantias.md](garantias.md#estado-atual-e-evidências).
-> Nomes de arquivos e módulos seguem a proposta inicial de [`arquitetura.md`](arquitetura.md) e podem evoluir.
+> Nomes de arquivos citados nas ADRs são os da implementação final (inventário em [`arquitetura.md`](arquitetura.md#12-estrutura-do-repositório)).
 
 **Princípio que guia todas as decisões:**
 
@@ -18,7 +18,7 @@
 | ADR | Título | Status |
 |---|---|---|
 | [ADR-001](#adr-001--fastapi-como-camada-http) | FastAPI como camada HTTP | Aceita |
-| [ADR-002](#adr-002--arquitetura-multiagente) | Arquitetura multiagente | Aceita (validada offline; Gemini pendente) |
+| [ADR-002](#adr-002--arquitetura-multiagente) | Arquitetura multiagente | Aceita (validada offline e com Gemini real no ensaio E2E) |
 | [ADR-003](#adr-003--três-especialistas-além-do-agente-principal) | Três especialistas além do agente principal | Aceita |
 | [ADR-004](#adr-004--agent--tool--service--repository) | Agent → Tool → Service → Repository | Aceita |
 | [ADR-005](#adr-005--sqlite-como-armazenamento) | SQLite como armazenamento | Aceita |
@@ -91,7 +91,7 @@ Adotar um **agente principal (Concierge)** com especialistas registrados como **
 - Evidência: `tests/test_agent_structure.py` e `tests/test_agent_runtime_scripted.py`; a transferência com Gemini real e com Tool Confirmation continua não comprovada.
 
 ### Pontos provisórios
-- Compatibilidade com Tool Confirmation, sessão persistida e restart comprovada offline no Passo 8 (RT-001/RT-002); Gemini real permanece pendente.
+- Compatibilidade com Tool Confirmation, sessão persistida e restart comprovada offline no Passo 8 (RT-001/RT-002) e com Gemini real no Passo 12.
 - Se a retomada não voltar ao agente que solicitou a confirmação, a topologia poderá mudar; essa revisão deverá ser registrada na ADR, preservando a decisão inicial e a evidência do teste.
 
 ### Alternativas consideradas
@@ -502,8 +502,8 @@ Confirmações passaram a viver em `condominio.db`, enquanto a pendência equiva
 
 | Tema | Onde |
 |---|---|
-| Validação da escolha inicial `sub_agents` + transferência e eventual revisão | ADR-002 |
-| Revalidar contenção HTTP com Gemini (cobertura roteirizada existente) | ADR-008 / ADR-013 |
+| ~~Validação da escolha inicial `sub_agents` + transferência~~ — validada com Gemini real no Passo 12 | ADR-002 |
+| ~~Revalidar contenção HTTP com Gemini~~ — aprovações simultâneas validadas no Passo 12 | ADR-008 / ADR-013 |
 | Calibração da busca lexical e qualidade da resposta com Gemini (granularidade e limites já decididos) | ADR-009 |
 | ~~Relação entre `id` de confirmação do backend e identificador do ADK~~ — decidido no Passo 8 (`id` = `function_call_id`) | ADR-012 |
 | Recuperação automática de `PROCESSING` órfão | ADR-012 |
